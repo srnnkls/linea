@@ -1,0 +1,34 @@
+amends "package://github.com/jdx/hk/releases/download/v2.4.0/hk@2.4.0#/Config.pkl"
+
+local rustGlob = List("src/**/*.rs", "Cargo.toml", "Cargo.lock")
+
+local fast = new Mapping<String, Step> {
+  ["fmt"] {
+    glob = rustGlob
+    check = "cargo fmt --check"
+    fix = "cargo fmt"
+  }
+  ["clippy"] {
+    glob = rustGlob
+    check = "cargo clippy --all-targets -- -D warnings"
+  }
+}
+
+hooks {
+  ["pre-commit"] {
+    fix = true
+    stage = true
+    fail_on_fix = true
+    stash = "none"
+    steps = new { ...fast }
+  }
+  ["check"] {
+    steps = new {
+      ...fast
+      ["test"] {
+        glob = rustGlob
+        check = "cargo test"
+      }
+    }
+  }
+}

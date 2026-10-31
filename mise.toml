@@ -1,0 +1,24 @@
+[tools]
+rust = { version = "1.98.1", profile = "default" }
+hk = { version = "2.4.0", postinstall = "hk install --mise", depends = ["pkl"] }
+pkl = "0.31.0"
+actionlint = "1.7.12"
+git-cliff = "2.13.1"
+cargo-dist = "0.32.0"
+release-plz = "0.3.159"
+
+[tasks.build]
+run = "cargo build --release"
+
+[tasks.test]
+run = "cargo test"
+
+[tasks.lint]
+description = "clippy (pedantic, warnings as errors) + rustfmt check"
+run = ["cargo clippy --all-targets -- -D warnings", "cargo fmt --check"]
+
+[tasks.fmt]
+run = "cargo fmt"
+
+[tasks.check]
+depends = ["lint", "test"]
