@@ -1,4 +1,12 @@
 /target
-.peer/
-.reviews/
-.issues/
+/resources
+/scopes/
+/.reviews
+/.issues
+/.worktrees/
+/.claude/worktrees/
+/.claude/settings.local.json
+.peer
+/phora.local.toml
+/phora.local.lock
+.DS_Store

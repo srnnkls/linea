@@ -1,0 +1,25 @@
+version = 1
+
+[[sources]]
+name = "gitoxide"
+git = "https://github.com/GitoxideLabs/gitoxide.git"
+resolved = "default"
+commit = "95194788d750cfa4ea3437782246a88798b146e1"
+digest = "blake3:140ad3120f043fa484a4a437bdc91a1b63a20117ebf42e4961cc5db0796f0f86"
+config_digest = "blake3:682a8348167b752a249453d35c63c3a765b6b4b59e3637ca7e33b5cb41a7f749"
+
+[[sources]]
+name = "jiff"
+git = "https://github.com/BurntSushi/jiff.git"
+resolved = "default"
+commit = "9cfd78f2d1d903289c6c465bf7def304d3a31e07"
+digest = "blake3:e9e4c1535b690ed0606b32654be6663448e483daad2e672de7fab5ae4e0c629b"
+config_digest = "blake3:08d3ff0a64a167114cc2f0913a3da911fa1b72af7609861f9ee97fc35954d0d8"
+
+[[sources]]
+name = "claude-code-statusline"
+git = "https://code.claude.com/docs/en/statusline.md"
+resolved = "url"
+commit = "1b6f220b5ca4239e21f4ac5ff7789b58221c1e40"
+digest = "blake3:cbb188f75d339ae38199c67442d83cab67823db981329dbef97b3b291c496b43"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"

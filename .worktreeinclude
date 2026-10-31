@@ -1,0 +1,4 @@
+resources/                   symlink
+.peer/                       symlink
+.reviews/                    symlink
+.claude/settings.local.json  symlink

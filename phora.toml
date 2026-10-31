@@ -1,0 +1,19 @@
+# Reference sources, materialized by `phora sync` into resources/ (ignored); this file and phora.lock are committed.
+
+[sources.gitoxide]
+host = "github"
+repo = "GitoxideLabs/gitoxide"
+include = ["gix/src/**", "gix-discover/src/**", "gix-ref/src/**"]
+
+[sources.jiff]
+host = "github"
+repo = "BurntSushi/jiff"
+include = ["crates/jiff/src/**"]
+
+[sources.claude-code-statusline]
+url = "https://code.claude.com/docs/en/statusline.md"
+
+[targets.resources]
+path = "resources"
+layout = "by-source"
+sources = ["gitoxide", "jiff", "claude-code-statusline"]
