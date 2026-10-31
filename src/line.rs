@@ -27,6 +27,17 @@ pub enum Appearance {
     Light,
 }
 
+impl Appearance {
+    /// Dark only when the interface style says so.
+    pub fn from_style(style: Option<&str>) -> Self {
+        if style == Some("Dark") {
+            Self::Dark
+        } else {
+            Self::Light
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(u8, u8, u8);
 
@@ -301,6 +312,13 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn appearance_is_dark_only_by_name() {
+        assert_eq!(Appearance::from_style(Some("Dark")), Appearance::Dark);
+        assert_eq!(Appearance::from_style(Some("Light")), Appearance::Light);
+        assert_eq!(Appearance::from_style(None), Appearance::Light);
     }
 
     #[test]

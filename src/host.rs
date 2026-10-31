@@ -92,8 +92,13 @@ fn basename(path: &str) -> &str {
     trimmed.rsplit('/').next().unwrap_or(trimmed)
 }
 
-#[cfg(target_os = "macos")]
 pub fn appearance() -> Appearance {
+    Appearance::from_style(interface_style().as_deref())
+}
+
+/// The global `AppleInterfaceStyle` preference, as `defaults read -g` gives it.
+#[cfg(target_os = "macos")]
+fn interface_style() -> Option<String> {
     use core_foundation::{
         base::{CFType, TCFType},
         string::CFString,
@@ -108,19 +113,16 @@ pub fn appearance() -> Appearance {
         CFPreferencesCopyAppValue(key.as_concrete_TypeRef(), kCFPreferencesAnyApplication)
     };
     if value.is_null() {
-        return Appearance::Light;
+        return None;
     }
     // SAFETY: a non-null result of a Copy function is owned by the caller.
     let value = unsafe { CFType::wrap_under_create_rule(value) };
-    match value.downcast::<CFString>() {
-        Some(style) if style == "Dark" => Appearance::Dark,
-        _ => Appearance::Light,
-    }
+    value.downcast::<CFString>().map(|style| style.to_string())
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn appearance() -> Appearance {
-    Appearance::Light
+fn interface_style() -> Option<String> {
+    None
 }
 
 #[cfg(test)]
