@@ -110,6 +110,9 @@ pub struct Section {
     /// A shell command whose first line of output is the section's text.
     #[serde(default)]
     pub run: Option<String>,
+    /// A minijinja template over the status JSON; takes the place of the built-in text.
+    #[serde(default)]
+    pub text: Option<String>,
     #[serde(default = "refresh", deserialize_with = "duration")]
     pub refresh: SignedDuration,
     #[serde(default = "timeout", deserialize_with = "duration")]
@@ -200,10 +203,17 @@ impl Config {
                     "line.sections names `{name}`, which no [sections.{name}] defines"
                 ))
             })?;
-            if section.run.is_none() && !crate::sections::BUILT_IN.contains(&name.as_str()) {
+            if section.run.is_none()
+                && section.text.is_none()
+                && !crate::sections::BUILT_IN.contains(&name.as_str())
+            {
                 return Err(Error::Invalid(format!(
-                    "sections.{name} is no built-in section and has no `run`"
+                    "sections.{name} is no built-in section and has neither `run` nor `text`"
                 )));
+            }
+            if let Some(text) = &section.text {
+                crate::template::check(text)
+                    .map_err(|error| Error::Invalid(format!("sections.{name}.text: {error}")))?;
             }
             if let Fit::Ranked(Claim {
                 requires: Some(required),

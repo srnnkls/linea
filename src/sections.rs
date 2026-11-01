@@ -1,11 +1,15 @@
-//! What each section shows: the built-in ones from the session, the rest from hooks.
+//! What each section shows: built-in texts from the session, hook output, or a `text` template.
+
+use std::collections::BTreeMap;
 
 use jiff::{Timestamp, tz::TimeZone};
+use serde_json::Value;
 
 use crate::{
     config::{Colour, Config, Rgb, Section},
     line::{Appearance, Part},
     status::{Context, Effort, Status},
+    template::Templates,
 };
 
 pub const BUILT_IN: [&str; 9] = [
@@ -24,54 +28,76 @@ pub struct Surroundings {
 }
 
 /// The configured sections that have something to show, in drawing order.
-/// `hook` gives a section's text when it has a `run` command.
+/// `hook` gives a section's output when it has a `run` command. A `text`
+/// template takes the place of the built-in text, and of a hook's output,
+/// which it reads as `output`; an empty result leaves the section out.
 pub fn parts(
     config: &Config,
     status: &Status,
     around: &Surroundings,
+    input: &Value,
     hook: impl Fn(&str, &Section) -> Option<String>,
-) -> Vec<Part> {
+) -> Result<Vec<Part>, String> {
     let palette = match around.appearance {
         Appearance::Dark => &config.palette.dark,
         Appearance::Light => &config.palette.light,
     };
-    config
+    let format = |name: &str| config.sections.get(name).and_then(|s| s.format.as_deref());
+    let built: BTreeMap<String, String> = BUILT_IN
+        .iter()
+        .map(|name| {
+            let text = built_in(name, format(name), status, around).unwrap_or_default();
+            ((*name).to_owned(), text)
+        })
+        .collect();
+    let any_template = config
         .line
         .sections
         .iter()
-        .filter_map(|name| {
-            let section = config
-                .sections
-                .get(name)
-                .filter(|section| section.enabled)?;
-            let text = if section.run.is_some() {
-                hook(name, section)
-            } else {
-                built_in(name, section, status, around)
-            }?;
-            let colour = match &section.colour {
-                Colour::Literal(rgb) => *rgb,
-                Colour::Named(name) => palette.get(name).copied().unwrap_or(Rgb(0x80, 0x80, 0x80)),
-            };
-            let icon = section
-                .icon
-                .clone()
-                .or_else(|| step(&section.icons, status.context.percent))
-                .unwrap_or_default();
-            Some(Part {
-                name: name.clone(),
-                colour,
-                icon,
-                text,
-                fit: section.fit.clone(),
-            })
-        })
-        .collect()
+        .any(|name| config.sections.get(name).is_some_and(|s| s.text.is_some()));
+    let renderer = any_template.then(|| Templates::new(input, built.clone(), around.zone.clone()));
+
+    let mut parts = Vec::new();
+    for name in &config.line.sections {
+        let Some(section) = config.sections.get(name).filter(|section| section.enabled) else {
+            continue;
+        };
+        let output = section.run.as_ref().and_then(|_| hook(name, section));
+        let text = match (&section.text, &renderer) {
+            (Some(_), _) if section.run.is_some() && output.is_none() => None,
+            (Some(source), Some(renderer)) => Some(
+                renderer
+                    .render(source, output.as_deref())
+                    .map_err(|error| format!("sections.{name}: {error}"))?,
+            )
+            .filter(|text| !text.is_empty()),
+            _ if section.run.is_some() => output,
+            _ => built_in(name, section.format.as_deref(), status, around),
+        };
+        let Some(text) = text else { continue };
+        let colour = match &section.colour {
+            Colour::Literal(rgb) => *rgb,
+            Colour::Named(name) => palette.get(name).copied().unwrap_or(Rgb(0x80, 0x80, 0x80)),
+        };
+        let icon = section
+            .icon
+            .clone()
+            .or_else(|| step(&section.icons, status.context.percent))
+            .unwrap_or_default();
+        parts.push(Part {
+            name: name.clone(),
+            colour,
+            icon,
+            text,
+            fit: section.fit.clone(),
+        });
+    }
+    Ok(parts)
 }
 
 fn built_in(
     name: &str,
-    section: &Section,
+    format: Option<&str>,
     status: &Status,
     around: &Surroundings,
 ) -> Option<String> {
@@ -86,11 +112,7 @@ fn built_in(
         "branch" => present(around.branch.clone()),
         "pane" => around.pane.clone(),
         "duration" => present(duration(status.elapsed_ms)),
-        "cache" => present(cache(
-            status,
-            section.format.as_deref().unwrap_or("%H:%M"),
-            &around.zone,
-        )),
+        "cache" => present(cache(status, format.unwrap_or("%H:%M"), &around.zone)),
         "misses" => (status.cache.misses > 0).then(|| status.cache.misses.to_string()),
         "context" => Some(context(&status.context)),
         _ => None,
@@ -121,7 +143,7 @@ fn context(context: &Context) -> String {
     )
 }
 
-fn human(n: f64) -> String {
+pub fn human(n: f64) -> String {
     if n >= 1_000_000.0 {
         format!("{:.1}M", n / 1_000_000.0)
     } else if n >= 1000.0 {
@@ -132,7 +154,7 @@ fn human(n: f64) -> String {
 }
 
 /// Hours and minutes; nothing before the first second.
-fn duration(elapsed_ms: i64) -> String {
+pub fn duration(elapsed_ms: i64) -> String {
     let seconds = elapsed_ms / 1000;
     if seconds > 0 {
         format!("{:02}:{:02}", seconds / 3600, seconds % 3600 / 60)
@@ -181,7 +203,10 @@ mod tests {
     }
 
     fn draw(config: &Config, status: &Status, around: &Surroundings, columns: i64) -> String {
-        let parts = parts(config, status, around, |name, _| Some(format!("<{name}>")));
+        let parts = parts(config, status, around, &json!({}), |name, _| {
+            Some(format!("<{name}>"))
+        })
+        .unwrap();
         strip(&line::render(&parts, columns, &config.line))
     }
 
@@ -253,6 +278,49 @@ mod tests {
         let status = Status::parse(&json!({"model": {"display_name": "Opus"}}));
         let line = draw(&config, &status, &around("dotfiles", "main"), 124);
         assert!(line.starts_with("\u{f035b} Opus  ~ <weather>  "), "{line}");
+    }
+
+    #[test]
+    fn a_text_template_reads_the_status_and_the_built_ins() {
+        let mut config = Config::defaults();
+        let mut cost = config.sections["pane"].clone();
+        cost.text = Some("{{ linea.branch }} ${{ cost.total_cost_usd | round(2) }}".into());
+        config.sections.insert("cost".into(), cost);
+        config.line.sections.insert(1, "cost".into());
+        let input = json!({"model": {"display_name": "Opus"}, "cost": {"total_cost_usd": 0.4567}});
+        let status = Status::parse(&input);
+        let parts = parts(
+            &config,
+            &status,
+            &around("dotfiles", "main"),
+            &input,
+            |_, _| None,
+        )
+        .unwrap();
+        let line = strip(&line::render(&parts, 124, &config.line));
+        assert!(line.contains("\u{eae3} main $0.46  "), "{line}");
+    }
+
+    #[test]
+    fn a_template_over_a_hook_waits_for_its_output() {
+        let mut config = Config::defaults();
+        let mut weather = config.sections["pane"].clone();
+        weather.run = Some("true".into());
+        weather.text = Some("{{ output }}°".into());
+        config.sections.insert("weather".into(), weather);
+        config.line.sections.insert(1, "weather".into());
+        let input = json!({"model": {"display_name": "Opus"}});
+        let status = Status::parse(&input);
+        let around = around("dotfiles", "main");
+        let draw = |out: Option<&str>| {
+            let parts = parts(&config, &status, &around, &input, |_, _| {
+                out.map(str::to_owned)
+            })
+            .unwrap();
+            strip(&line::render(&parts, 124, &config.line))
+        };
+        assert!(draw(Some("12")).contains("12°"));
+        assert!(!draw(None).contains('°'));
     }
 
     #[test]

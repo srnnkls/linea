@@ -5,6 +5,7 @@ mod line;
 mod report;
 mod sections;
 mod status;
+mod template;
 
 use std::{io::Read, path::Path};
 
@@ -62,7 +63,7 @@ fn main() {
         input: &raw,
         dir: &status.dir,
     };
-    let parts = sections::parts(&config, &status, &around, |name, section| {
+    let parts = sections::parts(&config, &status, &around, &input, |name, section| {
         let run = section.run.as_deref()?;
         hooks::text(
             &Hook {
@@ -74,5 +75,8 @@ fn main() {
             &session,
         )
     });
-    println!("{}", line::render(&parts, host::columns(), &config.line));
+    match parts {
+        Ok(parts) => println!("{}", line::render(&parts, host::columns(), &config.line)),
+        Err(error) => println!("\x1b[31mlinea: {error}\x1b[0m"),
+    }
 }

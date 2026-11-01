@@ -68,8 +68,42 @@ The built-in sections are `model`, `effort`, `project`, `branch`, `pane`, `durat
 | `fit` | `"always"`, a rank, or `{ rank, grow, min, requires }` |
 | `enabled` | `false` leaves the section out |
 | `format` | strftime format for `cache` |
+| `text` | A template that takes the place of the section's text |
+| `run` | A hook command; see below |
 
 Sections that `fit = "always"` take their columns first. Ranked sections then claim theirs from the lowest rank up while they fit. One section may `grow`: it holds up to `min` columns at its rank and takes whatever is left once every rank is placed, cut short with an ellipsis. `requires` draws a section only when another one is drawn.
+
+### Templates
+
+`text` is a [minijinja](https://docs.rs/minijinja) template (Jinja2 syntax) over the [status JSON](https://code.claude.com/docs/en/statusline#available-data) Claude Code sends. A section with only `text` can take any name; a result that is empty after trimming leaves the section out.
+
+```toml
+[sections.cost]
+text = "${{ cost.total_cost_usd | round(2) }}"
+icon = "\uF155"
+colour = "green"
+fit = 7
+
+[sections.pr]
+text = "{% if pr %}#{{ pr.number }} {{ pr.review_state }}{% endif %}"
+colour = "blue"
+fit = 8
+
+[sections.limit]
+text = "{{ rate_limits.five_hour.used_percentage | round }}% until {{ rate_limits.five_hour.resets_at | time }}"
+colour = "grey"
+fit = 9
+```
+
+Besides the status fields, a template sees:
+
+| Name | Value |
+| --- | --- |
+| `linea.<section>` | A built-in section's text, such as `linea.project` or `linea.branch` |
+| `env.<NAME>` | An environment variable |
+| `output` | The hook's output, in a section that also has `run` |
+
+and three filters beside minijinja's own: `tokens` (`45200` → `45k`), `duration` (milliseconds → `HH:MM`) and `time` (epoch seconds → local time, `time("%d %b %H:%M")` for another format). A missing field renders empty.
 
 ### Hooks
 
@@ -86,6 +120,14 @@ timeout = "3s"
 ```
 
 The command runs through `sh -c` in the session's working directory, with Claude Code's status JSON on stdin and `LINEA_SECTION` set to the section's name. The line never waits on it: linea shows the output it last cached for the session and starts a detached refresh once that output is older than `refresh` (30 seconds unless set). A command that fails, or outlasts `timeout` (5 seconds unless set), hides the section until its next refresh. Output is cached under `$XDG_CACHE_HOME/linea/hooks`.
+
+With `text` beside `run`, the template formats the hook's output:
+
+```toml
+[sections.weather]
+run = "curl -s 'wttr.in/?format=%t'"
+text = "{{ output | replace('+', '') }}"
+```
 
 ### Integrations
 
