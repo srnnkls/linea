@@ -44,6 +44,18 @@ pub fn workspace(dir: &str) -> (String, String) {
     (root, branch)
 }
 
+/// The herdr pane the session runs in, while herdr itself is up.
+pub fn herdr_pane() -> Option<String> {
+    let inside = var("HERDR_ENV").is_some_and(|flag| flag == "1");
+    let live =
+        var("HERDR_SOCKET_PATH").is_some_and(|socket| std::path::Path::new(&socket).exists());
+    if inside && live {
+        var("HERDR_PANE_ID")
+    } else {
+        None
+    }
+}
+
 /// The configured level when the session reports none.
 pub fn effort() -> Option<Effort> {
     if let Some(level) = var("CLAUDE_CODE_EFFORT_LEVEL") {

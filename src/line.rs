@@ -81,6 +81,7 @@ pub struct Surroundings {
     pub root: String,
     pub branch: String,
     pub effort: Option<Effort>,
+    pub pane: Option<String>,
     pub zone: TimeZone,
 }
 
@@ -185,6 +186,8 @@ pub fn render(status: &Status, around: &Surroundings) -> String {
             0
         }
     });
+    let pane = around.pane.as_deref().unwrap_or_default();
+    let (budget, pane) = budget.admit(Field::optional(palette.grey, '\u{eae3}', pane), reserve);
     let (budget, duration) = budget.admit(
         Field::optional(palette.grey, '\u{f051b}', duration(status.elapsed_ms)),
         reserve,
@@ -198,6 +201,7 @@ pub fn render(status: &Status, around: &Surroundings) -> String {
         effort,
         root,
         branch,
+        pane,
         duration,
         cache,
         misses,
@@ -297,6 +301,7 @@ mod tests {
             root: root.into(),
             branch: branch.into(),
             effort: Effort::new("high"),
+            pane: None,
             zone: TimeZone::UTC,
         }
     }
@@ -319,6 +324,18 @@ mod tests {
         assert_eq!(Appearance::from_style(Some("Dark")), Appearance::Dark);
         assert_eq!(Appearance::from_style(Some("Light")), Appearance::Light);
         assert_eq!(Appearance::from_style(None), Appearance::Light);
+    }
+
+    #[test]
+    fn the_pane_follows_the_branch_when_present() {
+        let status = Status::parse(&json!({"model": {"display_name": "Opus"}}));
+        let mut herdr = around(120, "dotfiles", "main");
+        herdr.pane = Some("wM5:p1".into());
+        let line = strip(&render(&status, &herdr));
+        assert!(line.contains("\u{f126} main  \u{eae3} wM5:p1  "), "{line}");
+        assert!(!strip(&render(&status, &around(120, "dotfiles", "main"))).contains('\u{eae3}'));
+        herdr.columns = 30;
+        assert!(!strip(&render(&status, &herdr)).contains("wM5"));
     }
 
     #[test]

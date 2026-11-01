@@ -37,6 +37,7 @@ fn main() {
         root,
         branch,
         effort,
+        pane: host::herdr_pane(),
         zone: TimeZone::system(),
     };
     println!("{}", line::render(&status, &around));
