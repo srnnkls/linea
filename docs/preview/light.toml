@@ -1,0 +1,5 @@
+[appearance]
+mode = "light"
+
+[report]
+enabled = false

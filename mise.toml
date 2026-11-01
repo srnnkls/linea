@@ -6,6 +6,7 @@ actionlint = "1.7.12"
 git-cliff = "2.13.1"
 cargo-dist = "0.32.0"
 release-plz = "0.3.159"
+"github:charmbracelet/freeze" = "0.2.2"
 
 [tasks.build]
 run = "cargo build --release"
@@ -22,3 +23,8 @@ run = "cargo fmt"
 
 [tasks.check]
 depends = ["lint", "test"]
+
+[tasks.preview]
+description = "Render the README previews into docs/preview"
+depends = ["build"]
+run = "docs/preview/render.sh"

@@ -10,3 +10,4 @@
 /phora.local.toml
 /phora.local.lock
 .DS_Store
+/docs/preview/.cache

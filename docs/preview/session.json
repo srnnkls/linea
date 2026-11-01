@@ -1,0 +1,1 @@
+{"model":{"display_name":"Opus 5.5","id":"claude-opus-5-5"},"session_id":"preview","effort":{"level":"high"},"context_window":{"total_input_tokens":93400,"context_window_size":200000,"used_percentage":46.7},"cost":{"total_duration_ms":4980000},"prompt_cache":{"caching_observed":true,"expires_at":1793620800,"misses":2}}
