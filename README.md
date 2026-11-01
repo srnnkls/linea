@@ -25,7 +25,7 @@ Then point Claude Code at it in `settings.json`:
 
 ## Configuration
 
-linea starts from its [built-in defaults](src/defaults.toml) (`linea defaults` prints them) and merges these files over them, later ones winning:
+linea starts from its [built-in defaults](assets/config/default.toml) (`linea defaults` prints them) and merges these files over them, later ones winning:
 
 1. `~/.config/linea/linea.toml`, or the file `LINEA_CONFIG` names
 2. `linea.toml`, then `linea.local.toml`, in every directory from `/` down to the session's working directory

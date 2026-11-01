@@ -5,7 +5,7 @@ linea renders the Claude Code status line: it reads the session JSON on stdin an
 ## Layout
 
 - `src/status.rs` parses the input into domain types, reading jq's `//` semantics: null and false are absent.
-- `src/config.rs` loads `defaults.toml` and the linea.toml files merged over it, and validates the result.
+- `src/config.rs` loads `assets/config/default.toml` and the linea.toml files merged over it, and validates the result.
 - `src/sections.rs` turns configured sections into parts: built-in texts from the session, hook texts through a callback.
 - `src/line.rs` fits parts into the width by `fit` and draws them.
 - `src/hooks.rs` serves hook output from a per-session cache and refreshes it in a detached `linea --hook` child.
@@ -17,7 +17,7 @@ Effects stay in `host`, `hooks` and `report`; `status`, `sections` and `line` ta
 ## Rules
 
 - No subprocess on the render path. Git goes through gix, time through jiff, the terminal through rustix.
-- `src/defaults.toml` is the output contract: section order, glyphs, colours and fits. A change to it is a `feat` or `fix`, never a refactor.
+- `assets/config/default.toml` is the output contract: section order, glyphs, colours and fits. A change to it is a `feat` or `fix`, never a refactor.
 - Anything tied to a machine or another tool belongs in the configuration, with its current behaviour as the default.
 - Rust style: `henia show loqui.languages.rust`.
 

@@ -12,7 +12,7 @@ use jiff::SignedDuration;
 use serde::{Deserialize, Deserializer, de};
 use toml::{Table, Value};
 
-pub const DEFAULTS: &str = include_str!("defaults.toml");
+pub const DEFAULTS: &str = include_str!("../assets/config/default.toml");
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
