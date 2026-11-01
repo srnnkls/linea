@@ -1,25 +1,12 @@
-use jiff::{Timestamp, tz::TimeZone};
+//! Fitting sections into the terminal width and drawing them.
 
-use crate::status::{Context, Effort, Status};
+use std::collections::HashSet;
 
-const ICON_WIDTH: i64 = 1;
-const GAP: &str = " ";
-const SEP: &str = "  ";
-const BRANCH_MIN: i64 = 24;
+use crate::config::{Fit, Line, Rgb};
+
 const RESET: &str = "\x1b[0m";
-
-/// Context pie glyphs, empty to full in eighths.
-const SLICES: [char; 9] = [
-    '\u{f0130}',
-    '\u{f0a9e}',
-    '\u{f0a9f}',
-    '\u{f0aa0}',
-    '\u{f0aa1}',
-    '\u{f0aa2}',
-    '\u{f0aa3}',
-    '\u{f0aa4}',
-    '\u{f0aa5}',
-];
+/// A growing section holds columns at its rank only when it can show this many.
+const HOLD_AT_LEAST: i64 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appearance {
@@ -38,83 +25,31 @@ impl Appearance {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rgb(u8, u8, u8);
-
-/// Recessed doom-one and doom-one-light hues and greys, beside Claude Code's own orange.
-#[derive(Debug, Clone, Copy)]
-struct Palette {
-    orange: Rgb,
-    blue: Rgb,
-    green: Rgb,
-    red: Rgb,
-    grey: Rgb,
-}
-
-impl Palette {
-    fn of(appearance: Appearance) -> Self {
-        let orange = Rgb(0xd7, 0x77, 0x57);
-        match appearance {
-            Appearance::Dark => Self {
-                orange,
-                blue: Rgb(0x6f, 0x9c, 0xc4),
-                green: Rgb(0x8a, 0xa3, 0x6c),
-                red: Rgb(0xb0, 0x7c, 0x7a),
-                grey: Rgb(0x7f, 0x85, 0x8b),
-            },
-            Appearance::Light => Self {
-                orange,
-                blue: Rgb(0x5f, 0x82, 0xc4),
-                green: Rgb(0x5f, 0x8f, 0x5e),
-                red: Rgb(0xa8, 0x70, 0x6b),
-                grey: Rgb(0x8a, 0x8e, 0x93),
-            },
-        }
-    }
-}
-
-/// What the line shows beyond the session state itself.
-#[derive(Debug, Clone)]
-pub struct Surroundings {
-    pub appearance: Appearance,
-    pub columns: i64,
-    pub root: String,
-    pub branch: String,
-    pub effort: Option<Effort>,
-    pub pane: Option<String>,
-    pub zone: TimeZone,
-}
-
+/// A section with something to show, ready to be fitted.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Field {
-    colour: Rgb,
-    glyph: char,
-    text: String,
+pub struct Part {
+    pub name: String,
+    pub colour: Rgb,
+    pub glyph: String,
+    pub text: String,
+    pub fit: Fit,
 }
 
-impl Field {
-    fn new(colour: Rgb, glyph: char, text: impl Into<String>) -> Self {
-        Self {
-            colour,
-            glyph,
-            text: text.into(),
+impl Part {
+    /// Columns on screen: glyph, gap and text.
+    fn width(&self, line: &Line) -> i64 {
+        if self.glyph.is_empty() {
+            len(&self.text)
+        } else {
+            len(&self.glyph) + len(&line.gap) + len(&self.text)
         }
     }
 
-    /// A field with no text shows nothing.
-    fn optional(colour: Rgb, glyph: char, text: impl Into<String>) -> Option<Self> {
-        Some(Self::new(colour, glyph, text)).filter(|field| !field.text.is_empty())
-    }
-
-    /// Columns on screen: icon, gap and text.
-    fn width(&self) -> i64 {
-        ICON_WIDTH + len(GAP) + len(&self.text)
-    }
-
-    fn render(&self) -> String {
+    fn render(&self, line: &Line) -> String {
         let Rgb(r, g, b) = self.colour;
+        let gap = if self.glyph.is_empty() { "" } else { &line.gap };
         format!(
-            "\x1b[38;2;{r};{g};{b}m{}{GAP}{}{RESET}",
+            "\x1b[38;2;{r};{g};{b}m{}{gap}{}{RESET}",
             self.glyph, self.text
         )
     }
@@ -125,107 +60,108 @@ impl Field {
 struct Budget {
     columns: i64,
     taken: i64,
+    separator: i64,
 }
 
 impl Budget {
-    fn admit(self, field: Option<Field>, reserve: i64) -> (Self, Option<Field>) {
-        match field {
-            Some(field) if self.taken + len(SEP) + field.width() + reserve <= self.columns => (
-                Self {
-                    taken: self.taken + len(SEP) + field.width(),
-                    ..self
-                },
-                Some(field),
-            ),
-            _ => (self, None),
+    fn fits(self, width: i64, reserve: i64) -> bool {
+        self.taken + self.separator + width + reserve <= self.columns
+    }
+
+    fn take(self, width: i64) -> Self {
+        Self {
+            taken: self.taken + self.separator + width,
+            ..self
         }
     }
 
-    /// Text columns left for one more field.
-    fn room(self) -> i64 {
-        self.columns - self.taken - len(SEP) - ICON_WIDTH - len(GAP)
+    /// Text columns left for one more part with this glyph.
+    fn room(self, part: &Part, line: &Line) -> i64 {
+        self.columns - self.taken - self.separator - (part.width(line) - len(&part.text))
     }
 }
 
-/// Model and token usage always show. Project and effort come next, then the
-/// branch at up to `BRANCH_MIN` columns, then duration and cache while they
-/// fit; the branch grows into whatever room is left.
-pub fn render(status: &Status, around: &Surroundings) -> String {
-    let palette = Palette::of(around.appearance);
-    let context = context_text(&status.context);
-    let model = Field::new(palette.orange, '\u{f035b}', &status.model.name);
-    let pie = Field::new(palette.grey, SLICES[slice(status.context.percent)], context);
-    let misses = (status.cache.misses > 0).then(|| status.cache.misses.to_string());
-    let misses = misses.and_then(|m| Field::optional(palette.red, '\u{f1635}', m));
-
-    let taken = model.width()
-        + len(SEP)
-        + pie.width()
-        + misses.as_ref().map_or(0, |m| len(SEP) + m.width());
-    let budget = Budget {
-        columns: around.columns,
+/// Parts arrive in drawing order. `always` parts take their columns first;
+/// ranked parts then claim theirs from the lowest rank up while they fit. A
+/// growing part holds up to its `min` at its rank and, once every rank is
+/// placed, takes whatever is left, cut short with an ellipsis.
+pub fn render(parts: &[Part], columns: i64, line: &Line) -> String {
+    let columns = columns - line.margin;
+    let always: Vec<&Part> = parts
+        .iter()
+        .filter(|part| part.fit == Fit::Always)
+        .collect();
+    let taken = always.iter().map(|part| part.width(line)).sum::<i64>()
+        + len(&line.separator) * (i64::try_from(always.len()).unwrap_or(0) - 1).max(0);
+    let mut budget = Budget {
+        columns,
         taken,
+        separator: len(&line.separator),
     };
+    let mut shown: HashSet<&str> = always.iter().map(|part| part.name.as_str()).collect();
 
-    let (budget, root) = budget.admit(Field::optional(palette.blue, '\u{ea83}', &around.root), 0);
-    let effort = around
-        .effort
-        .as_ref()
-        .map(Effort::as_str)
-        .unwrap_or_default();
-    let (budget, effort) = budget.admit(Field::optional(palette.grey, '\u{f140b}', effort), 0);
-    let branch = root
-        .as_ref()
-        .and_then(|_| Field::optional(palette.green, '\u{f126}', &around.branch));
+    let mut ranked: Vec<(i64, usize, &Part)> = parts
+        .iter()
+        .enumerate()
+        .filter_map(|(at, part)| match &part.fit {
+            Fit::Ranked(claim) => Some((claim.rank, at, part)),
+            Fit::Always => None,
+        })
+        .collect();
+    ranked.sort_by_key(|&(rank, at, _)| (rank, at));
 
-    let reserve = branch.as_ref().map_or(0, |branch| {
-        let held = budget.room().min(BRANCH_MIN).min(len(&branch.text));
-        if held >= 4 {
-            len(SEP) + ICON_WIDTH + len(GAP) + held
-        } else {
-            0
+    let mut reserve = 0;
+    let mut growing: Option<&Part> = None;
+    for (_, _, part) in ranked {
+        let Fit::Ranked(claim) = &part.fit else {
+            continue;
+        };
+        if claim
+            .requires
+            .as_deref()
+            .is_some_and(|required| !shown.contains(required))
+        {
+            continue;
         }
-    });
-    let pane = around.pane.as_deref().unwrap_or_default();
-    let (budget, pane) = budget.admit(Field::optional(palette.grey, '\u{eae3}', pane), reserve);
-    let (budget, duration) = budget.admit(
-        Field::optional(palette.grey, '\u{f051b}', duration(status.elapsed_ms)),
-        reserve,
-    );
-    let cache = cache_text(status, &around.zone);
-    let (budget, cache) = budget.admit(Field::optional(palette.grey, '\u{f162a}', cache), reserve);
-    let branch = branch.and_then(|branch| truncate(branch, budget.room()));
+        if claim.grow {
+            let held = budget.room(part, line).min(claim.min).min(len(&part.text));
+            if held >= HOLD_AT_LEAST {
+                reserve = len(&line.separator) + (part.width(line) - len(&part.text)) + held;
+            }
+            growing = Some(part);
+            shown.insert(&part.name);
+        } else if budget.fits(part.width(line), reserve) {
+            budget = budget.take(part.width(line));
+            shown.insert(&part.name);
+        }
+    }
+    let grown = growing.and_then(|part| truncate(part, budget.room(part, line)));
 
-    [
-        Some(model),
-        effort,
-        root,
-        branch,
-        pane,
-        duration,
-        cache,
-        misses,
-        Some(pie),
-    ]
-    .iter()
-    .flatten()
-    .map(Field::render)
-    .collect::<Vec<_>>()
-    .join(SEP)
+    parts
+        .iter()
+        .filter_map(|part| match &grown {
+            Some(grown) if grown.name == part.name => Some(grown.clone()),
+            _ if growing.is_some_and(|growing| growing.name == part.name) => None,
+            _ if part.fit == Fit::Always || shown.contains(part.name.as_str()) => {
+                Some(part.clone())
+            }
+            _ => None,
+        })
+        .map(|part| part.render(line))
+        .collect::<Vec<_>>()
+        .join(&line.separator)
 }
 
-fn truncate(field: Field, room: i64) -> Option<Field> {
-    if len(&field.text) <= room {
-        Some(field)
+fn truncate(part: &Part, room: i64) -> Option<Part> {
+    if len(&part.text) <= room {
+        Some(part.clone())
     } else if room > 1 {
         let kept = usize::try_from(room - 1).unwrap_or_default();
-        let text = field
-            .text
-            .chars()
-            .take(kept)
-            .chain(['…'])
-            .collect::<String>();
-        Some(Field { text, ..field })
+        let text = part.text.chars().take(kept).chain(['…']).collect();
+        Some(Part {
+            text,
+            ..part.clone()
+        })
     } else {
         None
     }
@@ -235,75 +171,28 @@ fn len(text: &str) -> i64 {
     i64::try_from(text.chars().count()).unwrap_or(i64::MAX)
 }
 
-/// The pie filled to the nearest eighth, full only at 100%.
-fn slice(percent: i64) -> usize {
-    let eighth = (percent.min(100) * 8 + 50) / 100;
-    let eighth = if eighth == 8 && percent < 100 {
-        7
-    } else {
-        eighth
-    };
-    usize::try_from(eighth.clamp(0, 8)).unwrap_or_default()
-}
-
-fn context_text(context: &Context) -> String {
-    format!(
-        "{}/{} ({}%)",
-        human(context.used),
-        human(context.size),
-        context.percent
-    )
-}
-
-fn human(n: f64) -> String {
-    if n >= 1_000_000.0 {
-        format!("{:.1}M", n / 1_000_000.0)
-    } else if n >= 1000.0 {
-        format!("{:.0}k", n / 1000.0)
-    } else {
-        format!("{}", n.trunc())
-    }
-}
-
-/// Hours and minutes; nothing before the first second.
-fn duration(elapsed_ms: i64) -> String {
-    let seconds = elapsed_ms / 1000;
-    if seconds > 0 {
-        format!("{:02}:{:02}", seconds / 3600, seconds % 3600 / 60)
-    } else {
-        String::new()
-    }
-}
-
-fn cache_text(status: &Status, zone: &TimeZone) -> String {
-    if !status.cache.observed || status.cache.expires <= 0 {
-        return String::new();
-    }
-    Timestamp::from_second(status.cache.expires)
-        .map(|at| {
-            at.to_zoned(zone.clone())
-                .strftime("%d %b %H:%M")
-                .to_string()
-        })
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::status::Status;
-    use serde_json::json;
+    use crate::config::{Claim, Config};
 
-    fn around(columns: i64, root: &str, branch: &str) -> Surroundings {
-        Surroundings {
-            appearance: Appearance::Dark,
-            columns,
-            root: root.into(),
-            branch: branch.into(),
-            effort: Effort::new("high"),
-            pane: None,
-            zone: TimeZone::UTC,
+    fn part(name: &str, text: &str, fit: Fit) -> Part {
+        Part {
+            name: name.into(),
+            colour: Rgb(1, 2, 3),
+            glyph: "#".into(),
+            text: text.into(),
+            fit,
         }
+    }
+
+    fn ranked(rank: i64) -> Fit {
+        Fit::Ranked(Claim {
+            rank,
+            grow: false,
+            min: 0,
+            requires: None,
+        })
     }
 
     fn strip(line: &str) -> String {
@@ -319,6 +208,10 @@ mod tests {
         out
     }
 
+    fn draw(parts: &[Part], columns: i64) -> String {
+        strip(&render(parts, columns, &Config::defaults().line))
+    }
+
     #[test]
     fn appearance_is_dark_only_by_name() {
         assert_eq!(Appearance::from_style(Some("Dark")), Appearance::Dark);
@@ -327,65 +220,53 @@ mod tests {
     }
 
     #[test]
-    fn the_pane_follows_the_branch_when_present() {
-        let status = Status::parse(&json!({"model": {"display_name": "Opus"}}));
-        let mut herdr = around(120, "dotfiles", "main");
-        herdr.pane = Some("wM5:p1".into());
-        let line = strip(&render(&status, &herdr));
-        assert!(line.contains("\u{f126} main  \u{eae3} wM5:p1  "), "{line}");
-        assert!(!strip(&render(&status, &around(120, "dotfiles", "main"))).contains('\u{eae3}'));
-        herdr.columns = 30;
-        assert!(!strip(&render(&status, &herdr)).contains("wM5"));
+    fn lower_ranks_claim_columns_first_and_keep_drawing_order() {
+        let parts = vec![
+            part("a", "aaaa", Fit::Always),
+            part("b", "bbbb", ranked(2)),
+            part("c", "cccc", ranked(1)),
+        ];
+        assert_eq!(draw(&parts, 40), "# aaaa  # bbbb  # cccc");
+        assert_eq!(draw(&parts, 4 + 6 + 8), "# aaaa  # cccc");
     }
 
     #[test]
-    fn human_scales_tokens() {
-        assert_eq!(human(999.0), "999");
-        assert_eq!(human(45_200.0), "45k");
-        assert_eq!(human(1_250_000.0), "1.2M");
+    fn a_growing_part_takes_what_is_left() {
+        let grow = Fit::Ranked(Claim {
+            rank: 1,
+            grow: true,
+            min: 4,
+            requires: None,
+        });
+        let parts = vec![
+            part("a", "aaaa", Fit::Always),
+            part("g", "a-long-branch", grow),
+            part("z", "zz", ranked(2)),
+        ];
+        assert_eq!(draw(&parts, 60), "# aaaa  # a-long-branch  # zz");
+        assert_eq!(draw(&parts, 4 + 24), "# aaaa  # a-long-…  # zz");
     }
 
     #[test]
-    fn pie_is_full_only_at_one_hundred() {
-        assert_eq!(slice(0), 0);
-        assert_eq!(slice(50), 4);
-        assert_eq!(slice(99), 7);
-        assert_eq!(slice(100), 8);
+    fn a_part_needs_what_it_requires() {
+        let needs = Fit::Ranked(Claim {
+            rank: 2,
+            grow: false,
+            min: 0,
+            requires: Some("p".into()),
+        });
+        let parts = vec![
+            part("a", "aaaa", Fit::Always),
+            part("p", "pppppppppp", ranked(1)),
+            part("n", "n", needs),
+        ];
+        assert_eq!(draw(&parts, 4 + 12), "# aaaa");
     }
 
     #[test]
-    fn duration_shows_hours_and_minutes() {
-        assert_eq!(duration(999), "");
-        assert_eq!(duration(3_725_000), "01:02");
-    }
-
-    #[test]
-    fn narrow_lines_drop_fields_and_truncate_the_branch() {
-        let status = Status::parse(&json!({
-            "model": {"display_name": "Opus"},
-            "context_window": {"total_input_tokens": 45_200, "used_percentage": 22},
-            "cost": {"total_duration_ms": 3_725_000},
-        }));
-        let wide = strip(&render(
-            &status,
-            &around(120, "dotfiles", "feature/long-branch-name"),
-        ));
-        assert!(
-            wide.contains("feature/long-branch-name") && wide.contains("01:02"),
-            "{wide}"
-        );
-        let narrow = strip(&render(
-            &status,
-            &around(64, "dotfiles", "feature/long-branch-name"),
-        ));
-        assert!(
-            narrow.contains('…') && !narrow.contains("01:02"),
-            "{narrow}"
-        );
-        let narrowest = strip(&render(
-            &status,
-            &around(48, "dotfiles", "feature/long-branch-name"),
-        ));
-        assert!(!narrowest.contains("feature"), "{narrowest}");
+    fn a_glyphless_part_has_no_gap() {
+        let mut bare = part("a", "text", Fit::Always);
+        bare.glyph.clear();
+        assert_eq!(draw(&[bare], 40), "text");
     }
 }

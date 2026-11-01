@@ -1,0 +1,96 @@
+# The configuration linea starts from. linea.toml files merge over it:
+# tables merge key by key, any other value replaces the one below it.
+
+[line]
+# Sections drawn, left to right.
+sections = ["model", "effort", "project", "branch", "pane", "duration", "cache", "misses", "context"]
+separator = "  "
+# Between a section's glyph and its text.
+gap = " "
+# Columns kept free at the right edge of the terminal.
+margin = 4
+
+[appearance]
+# auto follows the macOS appearance; dark or light pins one palette.
+mode = "auto"
+
+# Recessed doom-one and doom-one-light hues and greys, beside Claude Code's own orange.
+[palette.dark]
+orange = "#d77757"
+blue = "#6f9cc4"
+green = "#8aa36c"
+red = "#b07c7a"
+grey = "#7f858b"
+
+[palette.light]
+orange = "#d77757"
+blue = "#5f82c4"
+green = "#5f8f5e"
+red = "#a8706b"
+grey = "#8a8e93"
+
+[sections.model]
+glyph = "\U000F035B"
+colour = "orange"
+fit = "always"
+
+[sections.effort]
+glyph = "\U000F140B"
+colour = "grey"
+fit = 2
+
+[sections.project]
+glyph = "\uEA83"
+colour = "blue"
+fit = 1
+
+[sections.branch]
+glyph = "\uF126"
+colour = "green"
+fit = { rank = 3, grow = true, min = 24, requires = "project" }
+
+[sections.pane]
+glyph = "\uEAE3"
+colour = "grey"
+fit = 4
+
+[sections.duration]
+glyph = "\U000F051B"
+colour = "grey"
+fit = 5
+
+[sections.cache]
+glyph = "\U000F162A"
+colour = "grey"
+fit = 6
+format = "%d %b %H:%M"
+
+[sections.misses]
+glyph = "\U000F1635"
+colour = "red"
+fit = "always"
+
+[sections.context]
+# The pie fills by eighths, full only at 100%.
+glyphs = ["\U000F0130", "\U000F0A9E", "\U000F0A9F", "\U000F0AA0", "\U000F0AA1", "\U000F0AA2", "\U000F0AA3", "\U000F0AA4", "\U000F0AA5"]
+colour = "grey"
+fit = "always"
+
+# The pane section shows only inside a running herdr.
+[herdr]
+enabled = true
+inside = "HERDR_ENV"
+pane = "HERDR_PANE_ID"
+socket = "HERDR_SOCKET_PATH"
+
+# Model and effort changes go to this command as a StatusLine hook event on stdin.
+[report]
+enabled = true
+command = ["limen", "hook", "claude"]
+received = '"received":true'
+retry = "30s"
+requires = "HERDR_PANE_ID"
+
+# Where the effort level comes from when the session reports none.
+[claude]
+effort = "CLAUDE_CODE_EFFORT_LEVEL"

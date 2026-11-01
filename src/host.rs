@@ -4,20 +4,21 @@ use std::{env, fs::File, path::PathBuf};
 
 use serde_json::Value;
 
-use crate::{line::Appearance, status::Effort};
+use crate::{
+    config::{self, Mode},
+    line::Appearance,
+    status::Effort,
+};
 
-const MARGIN: i64 = 4;
-
-/// Text columns for the line: `COLUMNS`, else the controlling terminal, else 80, less a margin.
+/// Terminal columns: `COLUMNS`, else the controlling terminal, else 80.
 pub fn columns() -> i64 {
-    let columns = match var("COLUMNS") {
+    match var("COLUMNS") {
         Some(columns) => columns.trim().parse().unwrap_or(0),
         None => File::open("/dev/tty")
             .ok()
             .and_then(|tty| rustix::termios::tcgetwinsize(&tty).ok())
             .map_or(80, |size| i64::from(size.ws_col)),
-    };
-    columns - MARGIN
+    }
 }
 
 /// The project named by the repository's main worktree, else by the directory itself.
@@ -45,23 +46,29 @@ pub fn workspace(dir: &str) -> (String, String) {
 }
 
 /// The herdr pane the session runs in, while herdr itself is up.
-pub fn herdr_pane() -> Option<String> {
-    let inside = var("HERDR_ENV").is_some_and(|flag| flag == "1");
-    let live =
-        var("HERDR_SOCKET_PATH").is_some_and(|socket| std::path::Path::new(&socket).exists());
-    if inside && live {
-        var("HERDR_PANE_ID")
+pub fn herdr_pane(herdr: &config::Herdr) -> Option<String> {
+    let inside = var(&herdr.inside).is_some_and(|flag| flag == "1");
+    let live = var(&herdr.socket).is_some_and(|socket| std::path::Path::new(&socket).exists());
+    if herdr.enabled && inside && live {
+        var(&herdr.pane)
     } else {
         None
     }
 }
 
 /// The configured level when the session reports none.
-pub fn effort() -> Option<Effort> {
-    if let Some(level) = var("CLAUDE_CODE_EFFORT_LEVEL") {
+pub fn effort(claude: &config::Claude) -> Option<Effort> {
+    if let Some(level) = var(&claude.effort) {
         return Effort::new(level);
     }
-    let settings = std::fs::read(config_dir().join("settings.json")).ok()?;
+    let path = claude.settings.as_deref().map_or_else(
+        || config_dir().join("settings.json"),
+        |path| match path.strip_prefix("~") {
+            Ok(rest) => home().join(rest),
+            Err(_) => path.to_owned(),
+        },
+    );
+    let settings = std::fs::read(path).ok()?;
     let settings: Value = serde_json::from_slice(&settings).ok()?;
     let level = match settings.get("effortLevel") {
         None | Some(Value::Null | Value::Bool(false)) => "default".to_owned(),
@@ -71,11 +78,24 @@ pub fn effort() -> Option<Effort> {
     Effort::new(level)
 }
 
-pub fn config_dir() -> PathBuf {
+/// The global linea.toml: `LINEA_CONFIG`, else under the XDG config home.
+pub fn linea_config() -> PathBuf {
+    var("LINEA_CONFIG").map_or_else(
+        || {
+            var("XDG_CONFIG_HOME")
+                .map_or_else(|| home().join(".config"), PathBuf::from)
+                .join("linea")
+                .join("linea.toml")
+        },
+        PathBuf::from,
+    )
+}
+
+fn config_dir() -> PathBuf {
     var("CLAUDE_CONFIG_DIR").map_or_else(|| home().join(".claude"), PathBuf::from)
 }
 
-fn home() -> PathBuf {
+pub fn home() -> PathBuf {
     env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
@@ -104,8 +124,12 @@ fn basename(path: &str) -> &str {
     trimmed.rsplit('/').next().unwrap_or(trimmed)
 }
 
-pub fn appearance() -> Appearance {
-    Appearance::from_style(interface_style().as_deref())
+pub fn appearance(mode: Mode) -> Appearance {
+    match mode {
+        Mode::Auto => Appearance::from_style(interface_style().as_deref()),
+        Mode::Dark => Appearance::Dark,
+        Mode::Light => Appearance::Light,
+    }
 }
 
 /// The global `AppleInterfaceStyle` preference, as `defaults read -g` gives it.
