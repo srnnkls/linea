@@ -9,7 +9,7 @@ On a narrow terminal the lower-ranked sections give way and the branch is cut sh
 
 ![linea in a narrow terminal](docs/preview/narrow.png)
 
-The glyphs come from [Nerd Fonts](https://www.nerdfonts.com) v3.
+The icons come from [Nerd Fonts](https://www.nerdfonts.com) v3.
 
 ## Install
 
@@ -62,8 +62,8 @@ The built-in sections are `model`, `effort`, `project`, `branch`, `pane`, `durat
 
 | Key | Meaning |
 | --- | --- |
-| `glyph` | Drawn before the text; empty draws the text alone |
-| `glyphs` | Steps from empty to full, picked by the context share |
+| `icon` | Drawn before the text; empty draws the text alone |
+| `icons` | Steps from empty to full, picked by the context share |
 | `colour` | A palette name or a literal `#rrggbb` |
 | `fit` | `"always"`, a rank, or `{ rank, grow, min, requires }` |
 | `enabled` | `false` leaves the section out |
@@ -78,7 +78,7 @@ A section with `run` is a hook: a shell command whose first line of output is th
 ```toml
 [sections.weather]
 run = "curl -s 'wttr.in/?format=%t'"
-glyph = "󰖐"
+icon = "󰖐"
 colour = "grey"
 fit = 6
 refresh = "10m"

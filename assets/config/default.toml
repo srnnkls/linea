@@ -5,7 +5,7 @@
 # Sections drawn, left to right.
 sections = ["model", "effort", "project", "branch", "pane", "duration", "cache", "misses", "context"]
 separator = "  "
-# Between a section's glyph and its text.
+# Between a section's icon and its text.
 gap = " "
 # Columns kept free at the right edge of the terminal.
 margin = 4
@@ -30,49 +30,49 @@ red = "#a8706b"
 grey = "#8a8e93"
 
 [sections.model]
-glyph = "\U000F035B"
+icon = "\U000F035B"
 colour = "orange"
 fit = "always"
 
 [sections.effort]
-glyph = "\U000F140B"
+icon = "\U000F140B"
 colour = "grey"
 fit = 2
 
 [sections.project]
-glyph = "\uEA83"
+icon = "\uEA83"
 colour = "blue"
 fit = 1
 
 [sections.branch]
-glyph = "\uF126"
+icon = "\uF126"
 colour = "green"
 fit = { rank = 3, grow = true, min = 24, requires = "project" }
 
 [sections.pane]
-glyph = "\uEAE3"
+icon = "\uEAE3"
 colour = "grey"
 fit = 4
 
 [sections.duration]
-glyph = "\U000F051B"
+icon = "\U000F051B"
 colour = "grey"
 fit = 5
 
 [sections.cache]
-glyph = "\U000F162A"
+icon = "\U000F162A"
 colour = "grey"
 fit = 6
 format = "%d %b %H:%M"
 
 [sections.misses]
-glyph = "\U000F1635"
+icon = "\U000F1635"
 colour = "red"
 fit = "always"
 
 [sections.context]
 # The pie fills by eighths, full only at 100%.
-glyphs = ["\U000F0130", "\U000F0A9E", "\U000F0A9F", "\U000F0AA0", "\U000F0AA1", "\U000F0AA2", "\U000F0AA3", "\U000F0AA4", "\U000F0AA5"]
+icons = ["\U000F0130", "\U000F0A9E", "\U000F0A9F", "\U000F0AA0", "\U000F0AA1", "\U000F0AA2", "\U000F0AA3", "\U000F0AA4", "\U000F0AA5"]
 colour = "grey"
 fit = "always"
 

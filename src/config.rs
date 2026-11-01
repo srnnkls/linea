@@ -98,10 +98,10 @@ pub struct Section {
     #[serde(default = "enabled")]
     pub enabled: bool,
     #[serde(default)]
-    pub glyph: Option<String>,
-    /// Glyphs stepping with a share, as the context pie does.
+    pub icon: Option<String>,
+    /// Icons stepping with a share, as the context pie does.
     #[serde(default)]
-    pub glyphs: Vec<String>,
+    pub icons: Vec<String>,
     pub colour: Colour,
     pub fit: Fit,
     /// An strftime format, for sections that show a time.
@@ -347,7 +347,7 @@ mod tests {
     fn the_defaults_load() {
         let config = Config::defaults();
         assert_eq!(config.line.sections.len(), 9);
-        assert_eq!(config.sections["context"].glyphs.len(), 9);
+        assert_eq!(config.sections["context"].icons.len(), 9);
     }
 
     #[test]

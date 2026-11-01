@@ -17,7 +17,7 @@ Effects stay in `host`, `hooks` and `report`; `status`, `sections` and `line` ta
 ## Rules
 
 - No subprocess on the render path. Git goes through gix, time through jiff, the terminal through rustix.
-- `assets/config/default.toml` is the output contract: section order, glyphs, colours and fits. A change to it is a `feat` or `fix`, never a refactor.
+- `assets/config/default.toml` is the output contract: section order, icons, colours and fits. A change to it is a `feat` or `fix`, never a refactor.
 - Anything tied to a machine or another tool belongs in the configuration, with its current behaviour as the default.
 - Rust style: `henia show loqui.languages.rust`.
 

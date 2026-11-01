@@ -53,15 +53,15 @@ pub fn parts(
                 Colour::Literal(rgb) => *rgb,
                 Colour::Named(name) => palette.get(name).copied().unwrap_or(Rgb(0x80, 0x80, 0x80)),
             };
-            let glyph = section
-                .glyph
+            let icon = section
+                .icon
                 .clone()
-                .or_else(|| step(&section.glyphs, status.context.percent))
+                .or_else(|| step(&section.icons, status.context.percent))
                 .unwrap_or_default();
             Some(Part {
                 name: name.clone(),
                 colour,
-                glyph,
+                icon,
                 text,
                 fit: section.fit.clone(),
             })
@@ -97,9 +97,9 @@ fn built_in(
     }
 }
 
-/// The glyph for a share: steps from empty to full, the last one only at 100%.
-fn step(glyphs: &[String], percent: i64) -> Option<String> {
-    let last = i64::try_from(glyphs.len()).ok()? - 1;
+/// The icon for a share: steps from empty to full, the last one only at 100%.
+fn step(icons: &[String], percent: i64) -> Option<String> {
+    let last = i64::try_from(icons.len()).ok()? - 1;
     if last < 0 {
         return None;
     }
@@ -109,9 +109,7 @@ fn step(glyphs: &[String], percent: i64) -> Option<String> {
     } else {
         at
     };
-    glyphs
-        .get(usize::try_from(at.clamp(0, last)).ok()?)
-        .cloned()
+    icons.get(usize::try_from(at.clamp(0, last)).ok()?).cloned()
 }
 
 fn context(context: &Context) -> String {
@@ -196,11 +194,11 @@ mod tests {
 
     #[test]
     fn the_pie_is_full_only_at_one_hundred() {
-        let glyphs: Vec<String> = (0..9).map(|i| i.to_string()).collect();
-        assert_eq!(step(&glyphs, 0).as_deref(), Some("0"));
-        assert_eq!(step(&glyphs, 50).as_deref(), Some("4"));
-        assert_eq!(step(&glyphs, 99).as_deref(), Some("7"));
-        assert_eq!(step(&glyphs, 100).as_deref(), Some("8"));
+        let icons: Vec<String> = (0..9).map(|i| i.to_string()).collect();
+        assert_eq!(step(&icons, 0).as_deref(), Some("0"));
+        assert_eq!(step(&icons, 50).as_deref(), Some("4"));
+        assert_eq!(step(&icons, 99).as_deref(), Some("7"));
+        assert_eq!(step(&icons, 100).as_deref(), Some("8"));
         assert_eq!(step(&[], 50), None);
     }
 
@@ -249,7 +247,7 @@ mod tests {
         let mut config = Config::defaults();
         let mut weather = config.sections["pane"].clone();
         weather.run = Some("true".into());
-        weather.glyph = Some("~".into());
+        weather.icon = Some("~".into());
         config.sections.insert("weather".into(), weather);
         config.line.sections.insert(1, "weather".into());
         let status = Status::parse(&json!({"model": {"display_name": "Opus"}}));

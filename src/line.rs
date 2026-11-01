@@ -30,27 +30,27 @@ impl Appearance {
 pub struct Part {
     pub name: String,
     pub colour: Rgb,
-    pub glyph: String,
+    pub icon: String,
     pub text: String,
     pub fit: Fit,
 }
 
 impl Part {
-    /// Columns on screen: glyph, gap and text.
+    /// Columns on screen: icon, gap and text.
     fn width(&self, line: &Line) -> i64 {
-        if self.glyph.is_empty() {
+        if self.icon.is_empty() {
             len(&self.text)
         } else {
-            len(&self.glyph) + len(&line.gap) + len(&self.text)
+            len(&self.icon) + len(&line.gap) + len(&self.text)
         }
     }
 
     fn render(&self, line: &Line) -> String {
         let Rgb(r, g, b) = self.colour;
-        let gap = if self.glyph.is_empty() { "" } else { &line.gap };
+        let gap = if self.icon.is_empty() { "" } else { &line.gap };
         format!(
             "\x1b[38;2;{r};{g};{b}m{}{gap}{}{RESET}",
-            self.glyph, self.text
+            self.icon, self.text
         )
     }
 }
@@ -75,7 +75,7 @@ impl Budget {
         }
     }
 
-    /// Text columns left for one more part with this glyph.
+    /// Text columns left for one more part with this icon.
     fn room(self, part: &Part, line: &Line) -> i64 {
         self.columns - self.taken - self.separator - (part.width(line) - len(&part.text))
     }
@@ -180,7 +180,7 @@ mod tests {
         Part {
             name: name.into(),
             colour: Rgb(1, 2, 3),
-            glyph: "#".into(),
+            icon: "#".into(),
             text: text.into(),
             fit,
         }
@@ -264,9 +264,9 @@ mod tests {
     }
 
     #[test]
-    fn a_glyphless_part_has_no_gap() {
+    fn an_iconless_part_has_no_gap() {
         let mut bare = part("a", "text", Fit::Always);
-        bare.glyph.clear();
+        bare.icon.clear();
         assert_eq!(draw(&[bare], 40), "text");
     }
 }
