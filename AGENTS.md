@@ -25,7 +25,8 @@ Effects stay in `host`, `hooks` and `report`; `status`, `sections`, `template` a
 ## Commands
 
 ```sh
-mise run check   # clippy (pedantic, -D warnings), rustfmt check, tests
+mise run check   # clippy (pedantic, -D warnings), rustfmt check, unit and scrut tests
+mise run test-integration  # tests/scrut: end-to-end runs of the binary
 mise run build   # release binary at target/release/linea
 mise run preview # re-render the README images in docs/preview
 phora sync       # reference sources into resources/

@@ -29,6 +29,10 @@ hooks {
         glob = rustGlob
         check = "cargo test"
       }
+      ["integration"] {
+        glob = List("src/**/*.rs", "assets/**", "tests/scrut/*", "Cargo.toml", "Cargo.lock")
+        check = "mise run test-integration"
+      }
     }
   }
 }
