@@ -1,6 +1,6 @@
 # Send events
 
-When the text of a section marked `emit` changes, linea renders `events.body` and hands it to `events.command` on stdin, once per change. The defaults emit the model and the effort to limen while `HERDR_PANE_ID` is set.
+Events are off unless configured. Enabled, a change in the text of a section marked `emit` renders `events.body` and hands it to `events.command` on stdin, once per change.
 
 ```scrut
 $ . "$TESTDIR/_setup.sh" && isolate
@@ -27,6 +27,29 @@ $ mkdir app && cat > session.json <<'JSON'
 >   "workspace": {"current_dir": "app"}
 > }
 > JSON
+```
+
+With the defaults, nothing is sent.
+
+```scrut
+$ HERDR_PANE_ID=w1:p1 linea < session.json > /dev/null; sleep 0.3; ls tmp | wc -l | tr -d ' '
+0
+```
+
+The global config sends the model and the effort to limen as a StatusLine hook event, while `HERDR_PANE_ID` is set.
+
+```scrut
+$ mkdir -p config/linea && cat > config/linea/linea.toml <<'TOML'
+> sections.model.emit = true
+> sections.effort.emit = true
+>
+> [events]
+> enabled = true
+> command = ["limen", "hook", "claude"]
+> body = '''{"hook_event_name":"StatusLine","model":{{ model.id | default("") | tojson }},"effort":{{ ("" if linea.effort == "default" else linea.effort) | tojson }},"session_id":{{ session_id | default(none) | tojson }},"transcript_path":{{ transcript_path | default(none) | tojson }},"cwd":{{ cwd | default(none) | tojson }}}'''
+> acknowledge = { marker = '"received":true' }
+> requires = "HERDR_PANE_ID"
+> TOML
 ```
 
 The first render sends the state; the record holds it once acknowledged.
@@ -61,7 +84,7 @@ $ printf 'events.enabled = false\n' > app/linea.local.toml && jq '.session_id = 
 linea-events.s1
 ```
 
-Any section can emit, with its own command and body. Acknowledged by exit status, a command that fails is retried after `retry`.
+Any section can emit, to any command with any body. Acknowledged by exit status, a command that fails is retried after `retry`.
 
 ```scrut
 $ cat > bin/notify <<'SH'
@@ -76,6 +99,9 @@ $ cat > bin/notify <<'SH'
 > acknowledge = "exit"
 > retry = "1s"
 > requires = "NOTIFY"
+>
+> [sections.effort]
+> emit = false
 >
 > [line]
 > sections = ["model", "cost", "project"]

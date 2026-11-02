@@ -6,12 +6,8 @@ The pane section shows only inside a running herdr: `HERDR_ENV=1`, a pane id and
 $ . "$TESTDIR/_setup.sh" && isolate && line() { linea | sed 's/\x1b\[[0-9;]*m//g'; }
 ```
 
-Events stay off here, so no render reaches a real limen; events.md covers them.
-
 ```scrut
 $ mkdir app && touch sock && echo '{"model": {"display_name": "Opus"}, "workspace": {"current_dir": "app"}}' > session.json && cat > app/linea.toml <<'TOML'
-> events.enabled = false
->
 > [line]
 > sections = ["model", "pane"]
 >

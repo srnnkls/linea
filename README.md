@@ -157,7 +157,7 @@ template = "{{ output | replace('+', '') }}"
 
 ### Events
 
-Sections with `emit = true` (model and effort by default) send an event when their text changes: `events.body`, rendered as a template, goes to `events.command` on stdin, and the command acknowledges it by a marker in its output or by its exit status. By default the events go to limen, which shows the model and effort on the herdr pane. [docs/events.md](docs/events.md) describes the protocol: when an event goes out, what the command receives, and how acknowledgement and retries work.
+Events are off by default. Enabled, sections with `emit = true` send an event when their text changes: `events.body`, rendered as a template, goes to `events.command` on stdin, and the command acknowledges it by a marker in its output or by its exit status. [docs/events.md](docs/events.md) describes the protocol (when an event goes out, what the command receives, how acknowledgement and retries work) and a configuration that sends the model and effort to limen.
 
 ### Integrations
 

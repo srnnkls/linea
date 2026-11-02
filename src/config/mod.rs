@@ -162,11 +162,18 @@ pub struct Herdr {
     pub socket: String,
 }
 
-/// Where events go when an emitting section's text changes.
+/// Whether events go out when an emitting section's text changes, and where.
 #[derive(Debug, Clone)]
-pub struct Events {
-    pub enabled: bool,
-    pub command: Vec<String>,
+pub enum Events {
+    Off,
+    On(Sink),
+}
+
+/// The command events go to.
+#[derive(Debug, Clone)]
+pub struct Sink {
+    pub program: String,
+    pub args: Vec<String>,
     /// Rendered as the event the command reads on stdin.
     pub body: Template,
     pub acknowledgement: Acknowledgement,
@@ -230,6 +237,10 @@ pub enum Error {
     Threshold { section: String, key: String },
     #[error("events.body: {0}")]
     Body(String),
+    #[error("events are enabled but events.command names no program")]
+    NoProgram,
+    #[error("events are enabled but have no events.body")]
+    NoBody,
 }
 
 const REFRESH: SignedDuration = SignedDuration::from_secs(30);
@@ -399,17 +410,7 @@ impl TryFrom<raw::Config> for Config {
                 pane: raw.herdr.pane,
                 socket: raw.herdr.socket,
             },
-            events: Events {
-                enabled: raw.events.enabled,
-                command: raw.events.command,
-                body: Template::parse(&raw.events.body).map_err(Error::Body)?,
-                acknowledgement: match raw.events.acknowledge {
-                    raw::Acknowledge::Exit => Acknowledgement::ExitStatus,
-                    raw::Acknowledge::Marker(marker) => Acknowledgement::Marker(marker),
-                },
-                retry: raw.events.retry,
-                requires: raw.events.requires,
-            },
+            events: events(raw.events)?,
             claude: Claude {
                 effort: raw.claude.effort,
                 settings: raw.claude.settings,
@@ -480,6 +481,26 @@ impl Section {
             emit: section.emit,
         })
     }
+}
+
+fn events(events: raw::Events) -> Result<Events, Error> {
+    if !events.enabled {
+        return Ok(Events::Off);
+    }
+    let mut command = events.command.into_iter();
+    let program = command.next().ok_or(Error::NoProgram)?;
+    let body = Template::parse(&events.body.ok_or(Error::NoBody)?).map_err(Error::Body)?;
+    Ok(Events::On(Sink {
+        program,
+        args: command.collect(),
+        body,
+        acknowledgement: match events.acknowledge {
+            raw::Acknowledge::Exit => Acknowledgement::ExitStatus,
+            raw::Acknowledge::Marker(marker) => Acknowledgement::Marker(marker),
+        },
+        retry: events.retry,
+        requires: events.requires,
+    }))
 }
 
 fn fit(section: &str, fit: &raw::Fit, drawn: &[String]) -> Result<Fit, Error> {
@@ -685,18 +706,33 @@ mod tests {
     }
 
     #[test]
-    fn events_acknowledge_by_marker_or_by_exit_status() {
-        assert!(matches!(
-            with("").unwrap().events.acknowledgement,
-            Acknowledgement::Marker(_)
-        ));
+    fn events_are_off_unless_enabled_with_a_program_and_a_body() {
+        assert!(matches!(with("").unwrap().events, Events::Off));
+        let on =
+            "[events]\nenabled = true\ncommand = [\"notify\", \"-q\"]\nbody = \"{{ model.id }}\"\n";
+        let Events::On(sink) = with(on).unwrap().events else {
+            panic!("events are on")
+        };
         assert_eq!(
-            with("events.acknowledge = \"exit\"")
-                .unwrap()
-                .events
-                .acknowledgement,
-            Acknowledgement::ExitStatus
+            (sink.program.as_str(), sink.args.as_slice()),
+            ("notify", ["-q".to_owned()].as_slice())
         );
-        assert!(with("events.acknowledge = \"maybe\"").is_err());
+        assert_eq!(sink.acknowledgement, Acknowledgement::ExitStatus);
+        assert_eq!(
+            error("events.enabled = true\nevents.body = \"x\""),
+            "events are enabled but events.command names no program"
+        );
+        assert_eq!(
+            error("events.enabled = true\nevents.command = [\"notify\"]"),
+            "events are enabled but have no events.body"
+        );
+        let marked = format!("{on}acknowledge = {{ marker = \"ok\" }}");
+        assert!(matches!(
+            with(&marked).unwrap().events,
+            Events::On(Sink {
+                acknowledgement: Acknowledgement::Marker(_),
+                ..
+            })
+        ));
     }
 }

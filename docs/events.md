@@ -1,19 +1,22 @@
 # Events
 
-linea can tell another program when part of the status line changes. Sections marked `emit = true` make up a state; when that state changes, linea sends an event to the events command. By default the model and effort sections emit to [limen](https://github.com/srnnkls/limen), which shows them on the herdr pane: Claude Code's own hook events carry no effort level.
+linea can tell another program when part of the status line changes. Sections marked `emit = true` make up a state; when that state changes, linea sends an event to the events command. Events are off by default.
+
+This configuration sends the model and the effort to [limen](https://github.com/srnnkls/limen), which shows them on the herdr pane (Claude Code's own hook events carry no effort level), as the StatusLine hook event limen reads:
 
 ```toml
+sections.model.emit = true
+sections.effort.emit = true
+
 [events]
 enabled = true
 command = ["limen", "hook", "claude"]
-body = '''{"hook_event_name":"StatusLine","model":{{ model.id | default("") | tojson }}, …}'''
+body = '''{"hook_event_name":"StatusLine","model":{{ model.id | default("") | tojson }},"effort":{{ ("" if linea.effort == "default" else linea.effort) | tojson }},"session_id":{{ session_id | default(none) | tojson }},"transcript_path":{{ transcript_path | default(none) | tojson }},"cwd":{{ cwd | default(none) | tojson }}}'''
 acknowledge = { marker = '"received":true' }
-retry = "30s"
 requires = "HERDR_PANE_ID"
-
-[sections.model]
-emit = true
 ```
+
+Enabled events need a `command` and a `body`; `acknowledge` defaults to `"exit"` and `retry` to `"30s"`.
 
 ## The state
 
@@ -23,8 +26,8 @@ The state is the text of every emitting section that `line.sections` lists, in d
 
 On every render, linea sends an event when all of these hold:
 
-1. `events.enabled` is true.
-2. The variable `events.requires` names is set and not empty.
+1. Events are enabled.
+2. The variable `events.requires` names, if any, is set and not empty.
 3. Claude Code reported a `session_id`.
 4. The first word of `events.command` is an executable on `PATH`.
 5. The record for the session holds a different state, or holds this state unacknowledged and older than `retry`.
@@ -42,7 +45,7 @@ linea writes `<state> sent <now>` before it sends, so concurrent renders do not 
 
 linea starts the command in the background, detached from the render: the line never waits for it. The command's stdin carries `events.body`, rendered as a [template](../README.md#templates) over the status JSON, the built-in section texts under `linea` and the environment under `env`, followed by a newline. Its stderr is discarded.
 
-The default body is the StatusLine hook event limen reads:
+With the limen configuration above, the command reads:
 
 ```json
 {"hook_event_name":"StatusLine","model":"claude-opus-5-5","effort":"high","session_id":"…","transcript_path":"…","cwd":"…"}

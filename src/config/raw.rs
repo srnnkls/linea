@@ -130,8 +130,10 @@ pub struct Herdr {
 #[serde(deny_unknown_fields)]
 pub struct Events {
     pub enabled: bool,
+    #[serde(default)]
     pub command: Vec<String>,
-    pub body: String,
+    #[serde(default)]
+    pub body: Option<String>,
     pub acknowledge: Acknowledge,
     #[serde(deserialize_with = "required_duration")]
     pub retry: SignedDuration,

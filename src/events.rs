@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     child,
-    config::{self, Acknowledgement},
+    config::{self, Acknowledgement, Events},
     host,
     line::Part,
     session::SessionId,
@@ -30,7 +30,8 @@ pub struct Delivery {
     pub record: PathBuf,
     /// The emitting sections' texts, joined: the state this event reports.
     pub state: String,
-    pub command: Vec<String>,
+    pub program: String,
+    pub args: Vec<String>,
     pub acknowledgement: Acknowledgement,
     pub body: String,
 }
@@ -86,22 +87,21 @@ pub fn state(config: &config::Config, parts: &[Part]) -> Option<String> {
 
 /// Sends an event when the state changed since the command last acknowledged it.
 pub fn send(
-    events: &config::Events,
+    events: &Events,
     state: Option<&str>,
     scope: &Scope,
     session: &SessionId,
     now: Timestamp,
 ) {
-    let (Some(state), Some(program)) = (state, events.command.first()) else {
+    let (Events::On(events), Some(state)) = (events, state) else {
         return;
     };
-    if !events.enabled
-        || events
-            .requires
-            .as_deref()
-            .is_some_and(|name| host::var(name).is_none())
+    if events
+        .requires
+        .as_deref()
+        .is_some_and(|name| host::var(name).is_none())
         || session.is_empty()
-        || !host::on_path(program)
+        || !host::on_path(&events.program)
     {
         return;
     }
@@ -124,7 +124,8 @@ pub fn send(
     let delivery = Delivery {
         record,
         state: state.to_owned(),
-        command: events.command.clone(),
+        program: events.program.clone(),
+        args: events.args.clone(),
         acknowledgement: events.acknowledgement.clone(),
         body,
     };
@@ -133,11 +134,8 @@ pub fn send(
 
 /// The detached child: hands the body to the command and records whether it acknowledged it.
 pub fn deliver(delivery: &Delivery) {
-    let Some((program, args)) = delivery.command.split_first() else {
-        return;
-    };
-    let Ok(mut command) = Command::new(program)
-        .args(args)
+    let Ok(mut command) = Command::new(&delivery.program)
+        .args(&delivery.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

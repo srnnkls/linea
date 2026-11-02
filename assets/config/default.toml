@@ -33,13 +33,11 @@ grey = "#8a8e93"
 icon = "\U000F035B"
 colour = "orange"
 fit = "always"
-emit = true
 
 [sections.effort]
 icon = "\U000F140B"
 colour = "grey"
 fit = 2
-emit = true
 
 [sections.project]
 icon = "\uEA83"
@@ -89,15 +87,13 @@ inside = "HERDR_ENV"
 pane = "HERDR_PANE_ID"
 socket = "HERDR_SOCKET_PATH"
 
-# When the text of a section with `emit = true` changes, the rendered body
-# goes to this command on stdin; docs/events.md describes the protocol.
+# Off by default. Enabled, a change in the text of a section with
+# `emit = true` sends `body`, rendered as a template, to `command` on stdin;
+# docs/events.md describes the protocol.
 [events]
-enabled = true
-command = ["limen", "hook", "claude"]
-body = '''{"hook_event_name":"StatusLine","model":{{ model.id | default("") | tojson }},"effort":{{ ("" if linea.effort == "default" else linea.effort) | tojson }},"session_id":{{ session_id | default(none) | tojson }},"transcript_path":{{ transcript_path | default(none) | tojson }},"cwd":{{ cwd | default(none) | tojson }}}'''
-acknowledge = { marker = '"received":true' }
+enabled = false
+acknowledge = "exit"
 retry = "30s"
-requires = "HERDR_PANE_ID"
 
 # Where the effort level comes from when the session reports none.
 [claude]
