@@ -20,12 +20,16 @@ line() {
 }
 
 shoot() {
-  line "$2" "$3" > "$scratch/$1.ansi"
-  freeze --execute "cat $scratch/$1.ansi" --output "$here/$1.png" \
-    --font.file "$font" --font.family "$family" --font.size 14 --background "$4" --width "$5" \
-    --padding 14,20 --margin 0 --border.radius 6 --window=false </dev/null
+  printf '%s' "$(line "$2" "$3")" > "$scratch/$1.ansi"
+  freeze --execute "cat $scratch/$1.ansi" --output "$scratch/$1.png" \
+    --font.file "$font" --font.family "$family" --font.size 14 --background "$4" \
+    --padding 40 --margin 0 --border.radius 0 --window=false </dev/null
+  magick "$scratch/$1.png" -bordercolor "$4" -border 1 -fuzz 15% -trim +repage \
+    -border 48x36 \( +clone -alpha extract -fill black -colorize 100 -fill white \
+    -draw 'roundrectangle 0,0 %[fx:w-1],%[fx:h-1] 24,24' \) \
+    -alpha off -compose CopyOpacity -composite "$here/$1.png"
 }
 
-shoot dark dark 124 '#282c34' 1060
-shoot light light 124 '#fafafa' 1060
-shoot narrow dark 64 '#282c34' 580
+shoot dark dark 124 '#282c34'
+shoot light light 124 '#fafafa'
+shoot narrow dark 64 '#282c34'

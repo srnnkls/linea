@@ -128,7 +128,7 @@ A section with `run` is a hook: a shell command whose first line of output is th
 ```toml
 [sections.weather]
 run = "curl -s 'wttr.in/?format=%t'"
-icon = "󰖐"
+icon = "\U000F0590"
 colour = "grey"
 fit = 6
 refresh = "10m"
@@ -169,5 +169,5 @@ settings = "~/.claude/settings.json"   # unset follows CLAUDE_CONFIG_DIR
 
 ```sh
 mise run check     # clippy, rustfmt, unit and scrut tests
-mise run preview   # re-render docs/preview; LINEA_PREVIEW_FONT and LINEA_PREVIEW_FAMILY pick the font
+mise run preview   # re-render docs/preview (needs ImageMagick); LINEA_PREVIEW_FONT and LINEA_PREVIEW_FAMILY pick the font
 ```
