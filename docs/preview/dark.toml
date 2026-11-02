@@ -1,5 +1,5 @@
 [appearance]
 mode = "dark"
 
-[report]
+[events]
 enabled = false
