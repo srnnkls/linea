@@ -1,5 +1,13 @@
 # linea
 
+*līnea • a line, a thread*
+
+> From Latin *līnea* ("linen thread, string; a line"), from *līnum* ("flax, linen")
+>
+> Pronunciation: /ˈliː.ne.a/
+
+## About
+
 A status line for Claude Code: model, effort, project, branch, herdr pane, session time, prompt cache and context use, fitted to the terminal width.
 
 ![linea in a dark terminal](docs/preview/dark.png)
@@ -9,13 +17,13 @@ On a narrow terminal the lower-ranked sections give way and the branch is cut sh
 
 ![linea in a narrow terminal](docs/preview/narrow.png)
 
-The icons come from [Nerd Fonts](https://www.nerdfonts.com) v3.
-
 ## Install
 
 ```sh
 mise use -g github:srnnkls/linea
 ```
+
+The default icons are [Nerd Fonts](https://www.nerdfonts.com) v3 glyphs: the terminal needs a Nerd Font, or every icon draws as a box. Without one, set the icons to plain Unicode or leave them empty (see [Sections](#sections) and [Icons](#icons)).
 
 Then point Claude Code at it in `settings.json`:
 
@@ -38,7 +46,7 @@ sections = ["model", "effort", "project", "branch", "weather", "context"]
 separator = "  "
 
 [appearance]
-mode = "auto"            # auto follows macOS (light elsewhere); dark or light pins a palette
+mode = "auto"            # auto follows the desktop; dark or light pins a palette
 
 [palette.dark]
 teal = "#4db5bd"
@@ -53,6 +61,8 @@ fit = { rank = 3, grow = true, min = 16, requires = "project" }
 [sections.cache]
 format = "%H:%M"
 ```
+
+`auto` reads the system's preference: the macOS appearance, or on Linux the freedesktop settings portal (`org.freedesktop.appearance` `color-scheme`, which GNOME, KDE and most portal backends provide). Where neither answers, as over SSH, it falls back to the terminal's `COLORFGBG`, then to light.
 
 A colour name has to exist in both palettes. A key that does not apply to its section, such as `format` outside `cache` or `fit.min` on a section that does not grow, is an error rather than ignored.
 
