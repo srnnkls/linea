@@ -77,9 +77,11 @@ impl Pane {
     }
 }
 
-/// The environment, for templates to read.
+/// The environment, for templates to read; an entry that is not UTF-8 is left out.
 pub fn vars() -> BTreeMap<String, String> {
-    env::vars().collect()
+    env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
 }
 
 /// Terminal columns: `COLUMNS`, else the controlling terminal, else 80.
