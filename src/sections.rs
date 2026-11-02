@@ -1,4 +1,4 @@
-//! What each section shows: built-in texts from the session, hook output, or a `text` template.
+//! What each section shows: built-in texts from the session, hook output, or a template.
 
 use std::collections::BTreeMap;
 
@@ -28,16 +28,17 @@ pub struct Surroundings {
 }
 
 /// The configured sections that have something to show, in drawing order.
-/// `hook` gives a section's output when it has a `run` command. A `text`
-/// template takes the place of the built-in text, and of a hook's output,
-/// which it reads as `output`; an empty result leaves the section out.
+/// `hook` gives a section's output when it has a `run` command. A template
+/// takes the place of the built-in text, and of a hook's output, which it
+/// reads as `output`; an empty result, or one that fails to render, leaves the
+/// section out.
 pub fn parts(
     config: &Config,
     status: &Status,
     around: &Surroundings,
     input: &Value,
     hook: impl Fn(&str, &Section) -> Option<String>,
-) -> Result<Vec<Part>, String> {
+) -> Vec<Part> {
     let palette = match around.appearance {
         Appearance::Dark => &config.palette.dark,
         Appearance::Light => &config.palette.light,
@@ -50,11 +51,12 @@ pub fn parts(
             ((*name).to_owned(), text)
         })
         .collect();
-    let any_template = config
-        .line
-        .sections
-        .iter()
-        .any(|name| config.sections.get(name).is_some_and(|s| s.text.is_some()));
+    let any_template = config.line.sections.iter().any(|name| {
+        config
+            .sections
+            .get(name)
+            .is_some_and(|s| s.template.is_some())
+    });
     let renderer = any_template.then(|| Templates::new(input, built.clone(), around.zone.clone()));
 
     let mut parts = Vec::new();
@@ -63,14 +65,12 @@ pub fn parts(
             continue;
         };
         let output = section.run.as_ref().and_then(|_| hook(name, section));
-        let text = match (&section.text, &renderer) {
+        let text = match (&section.template, &renderer) {
             (Some(_), _) if section.run.is_some() && output.is_none() => None,
-            (Some(source), Some(renderer)) => Some(
-                renderer
-                    .render(source, output.as_deref())
-                    .map_err(|error| format!("sections.{name}: {error}"))?,
-            )
-            .filter(|text| !text.is_empty()),
+            (Some(source), Some(renderer)) => renderer
+                .render(source, output.as_deref())
+                .ok()
+                .filter(|text| !text.is_empty()),
             _ if section.run.is_some() => output,
             _ => built_in(name, section.format.as_deref(), status, around),
         };
@@ -92,7 +92,7 @@ pub fn parts(
             fit: section.fit.clone(),
         });
     }
-    Ok(parts)
+    parts
 }
 
 fn built_in(
@@ -205,8 +205,7 @@ mod tests {
     fn draw(config: &Config, status: &Status, around: &Surroundings, columns: i64) -> String {
         let parts = parts(config, status, around, &json!({}), |name, _| {
             Some(format!("<{name}>"))
-        })
-        .unwrap();
+        });
         strip(&line::render(&parts, columns, &config.line))
     }
 
@@ -284,7 +283,7 @@ mod tests {
     fn a_text_template_reads_the_status_and_the_built_ins() {
         let mut config = Config::defaults();
         let mut cost = config.sections["pane"].clone();
-        cost.text = Some("{{ linea.branch }} ${{ cost.total_cost_usd | round(2) }}".into());
+        cost.template = Some("{{ linea.branch }} ${{ cost.total_cost_usd | round(2) }}".into());
         config.sections.insert("cost".into(), cost);
         config.line.sections.insert(1, "cost".into());
         let input = json!({"model": {"display_name": "Opus"}, "cost": {"total_cost_usd": 0.4567}});
@@ -295,8 +294,7 @@ mod tests {
             &around("dotfiles", "main"),
             &input,
             |_, _| None,
-        )
-        .unwrap();
+        );
         let line = strip(&line::render(&parts, 124, &config.line));
         assert!(line.contains("\u{eae3} main $0.46  "), "{line}");
     }
@@ -306,7 +304,7 @@ mod tests {
         let mut config = Config::defaults();
         let mut weather = config.sections["pane"].clone();
         weather.run = Some("true".into());
-        weather.text = Some("{{ output }}°".into());
+        weather.template = Some("{{ output }}°".into());
         config.sections.insert("weather".into(), weather);
         config.line.sections.insert(1, "weather".into());
         let input = json!({"model": {"display_name": "Opus"}});
@@ -315,8 +313,7 @@ mod tests {
         let draw = |out: Option<&str>| {
             let parts = parts(&config, &status, &around, &input, |_, _| {
                 out.map(str::to_owned)
-            })
-            .unwrap();
+            });
             strip(&line::render(&parts, 124, &config.line))
         };
         assert!(draw(Some("12")).contains("12°"));

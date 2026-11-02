@@ -112,7 +112,7 @@ pub struct Section {
     pub run: Option<String>,
     /// A minijinja template over the status JSON; takes the place of the built-in text.
     #[serde(default)]
-    pub text: Option<String>,
+    pub template: Option<String>,
     #[serde(default = "refresh", deserialize_with = "duration")]
     pub refresh: SignedDuration,
     #[serde(default = "timeout", deserialize_with = "duration")]
@@ -204,16 +204,17 @@ impl Config {
                 ))
             })?;
             if section.run.is_none()
-                && section.text.is_none()
+                && section.template.is_none()
                 && !crate::sections::BUILT_IN.contains(&name.as_str())
             {
                 return Err(Error::Invalid(format!(
-                    "sections.{name} is no built-in section and has neither `run` nor `text`"
+                    "sections.{name} is no built-in section and has neither `run` nor `template`"
                 )));
             }
-            if let Some(text) = &section.text {
-                crate::template::check(text)
-                    .map_err(|error| Error::Invalid(format!("sections.{name}.text: {error}")))?;
+            if let Some(text) = &section.template {
+                crate::template::check(text).map_err(|error| {
+                    Error::Invalid(format!("sections.{name}.template: {error}"))
+                })?;
             }
             if let Fit::Ranked(Claim {
                 requires: Some(required),

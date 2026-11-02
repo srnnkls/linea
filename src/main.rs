@@ -75,8 +75,5 @@ fn main() {
             &session,
         )
     });
-    match parts {
-        Ok(parts) => println!("{}", line::render(&parts, host::columns(), &config.line)),
-        Err(error) => println!("\x1b[31mlinea: {error}\x1b[0m"),
-    }
+    println!("{}", line::render(&parts, host::columns(), &config.line));
 }

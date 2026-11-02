@@ -1,4 +1,4 @@
-//! `text` templates: minijinja over Claude Code's status JSON, with the
+//! Section templates: minijinja over Claude Code's status JSON, with the
 //! built-in section texts under `linea`, the environment under `env` and a
 //! hook's output as `output`.
 
@@ -19,17 +19,26 @@ impl Templates {
     pub fn new(input: &Value, linea: BTreeMap<String, String>, zone: TimeZone) -> Self {
         let mut env = Environment::new();
         env.set_undefined_behavior(UndefinedBehavior::Chainable);
-        env.add_filter("tokens", sections::human);
-        env.add_filter("duration", |ms: f64| sections::duration(floor(ms)));
-        env.add_filter("time", move |seconds: f64, format: Option<String>| {
-            Timestamp::from_second(floor(seconds))
-                .map(|at| {
-                    at.to_zoned(zone.clone())
-                        .strftime(format.as_deref().unwrap_or("%H:%M"))
-                        .to_string()
-                })
+        env.add_filter("tokens", |n: Option<f64>| {
+            n.map(sections::human).unwrap_or_default()
+        });
+        env.add_filter("duration", |ms: Option<f64>| {
+            ms.map(|ms| sections::duration(floor(ms)))
                 .unwrap_or_default()
         });
+        env.add_filter(
+            "time",
+            move |seconds: Option<f64>, format: Option<String>| {
+                seconds
+                    .and_then(|seconds| Timestamp::from_second(floor(seconds)).ok())
+                    .map(|at| {
+                        at.to_zoned(zone.clone())
+                            .strftime(format.as_deref().unwrap_or("%H:%M"))
+                            .to_string()
+                    })
+                    .unwrap_or_default()
+            },
+        );
 
         let mut base = input.as_object().cloned().unwrap_or_default();
         base.insert(
@@ -115,6 +124,19 @@ mod tests {
         );
         assert_eq!(t.render("{{ linea.branch }}", None).unwrap(), "main");
         assert_eq!(t.render("{{ output }}°", Some("12")).unwrap(), "12°");
+    }
+
+    #[test]
+    fn linea_filters_render_a_missing_field_empty() {
+        let t = templates();
+        assert_eq!(
+            t.render(
+                "{{ nope | tokens }}{{ nope | duration }}{{ nope | time }}",
+                None
+            )
+            .unwrap(),
+            ""
+        );
     }
 
     #[test]
