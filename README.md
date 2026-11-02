@@ -10,12 +10,12 @@
 
 A status line for Claude Code: model, effort, project, branch, herdr pane, session time, prompt cache and context use, fitted to the terminal width.
 
-![linea in a dark terminal](docs/preview/dark.png)
-![linea in a light terminal](docs/preview/light.png)
+<img src="docs/preview/dark.png" alt="linea in a dark terminal" width="872">
+<img src="docs/preview/light.png" alt="linea in a light terminal" width="872">
 
 On a narrow terminal the lower-ranked sections give way and the branch is cut short:
 
-![linea in a narrow terminal](docs/preview/narrow.png)
+<img src="docs/preview/narrow.png" alt="linea in a narrow terminal" width="553">
 
 ## Install
 
