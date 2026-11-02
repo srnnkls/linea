@@ -58,7 +58,7 @@ A colour name has to exist in both palettes.
 
 ### Sections
 
-The built-in sections are `model`, `effort`, `project`, `branch`, `pane`, `duration`, `cache`, `misses` and `context`. Each takes:
+The built-in sections are `model`, `effort`, `project`, `branch`, `pane`, `duration`, `cache`, `cache_misses` and `context`. Each takes:
 
 | Key | Meaning |
 | --- | --- |

@@ -1,27 +1,46 @@
-//! Sends model and effort changes to a hook command (limen by default, which
+//! Sends model and effort changes to a report command (limen by default, which
 //! relays them to the herdr pane: the hook events it hears carry no effort).
 //! One record per session holds the last key sent and whether the command took
 //! it; an unanswered send is retried once `retry` has passed.
 
 use std::{
-    ffi::OsString,
     fs,
-    io::{Read, Write},
-    os::unix::process::CommandExt,
+    io::Write,
     path::PathBuf,
     process::{Command, Stdio},
 };
 
-use serde::Serialize;
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    config, host,
-    status::{Effort, Status},
+    child, config, host,
+    session::{Effort, Session},
 };
 
-/// The hidden argument that runs the send in a detached child.
-pub const RECEIPT: &str = "--receipt";
+pub const SUBCOMMAND: &str = "deliver";
+
+/// What a detached child needs to deliver one report.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Delivery {
+    pub record: PathBuf,
+    pub key: String,
+    pub command: Vec<String>,
+    pub received: String,
+    pub event: Event,
+}
+
+/// A `StatusLine` hook event, as the report command reads it on stdin.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Event {
+    hook_event_name: String,
+    model: String,
+    effort: String,
+    session_id: Value,
+    transcript_path: Value,
+    cwd: Value,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Record {
@@ -56,23 +75,13 @@ impl Record {
     }
 }
 
-#[derive(Serialize)]
-struct Payload<'a> {
-    hook_event_name: &'static str,
-    model: &'a str,
-    effort: &'a str,
-    session_id: &'a Value,
-    transcript_path: &'a Value,
-    cwd: &'a Value,
-}
-
 /// Sends the session's model and effort when they changed since the command last took them.
-pub fn model(
+pub fn send(
     report: &config::Report,
     input: &Value,
-    status: &Status,
+    session: &Session,
     effort: Option<&Effort>,
-    now: i64,
+    now: Timestamp,
 ) {
     let Some(program) = report.command.first() else {
         return;
@@ -82,77 +91,50 @@ pub fn model(
             .requires
             .as_deref()
             .is_some_and(|name| host::var(name).is_none())
-        || status.model.id.is_empty()
-        || status.session.is_empty()
+        || session.model.id.is_empty()
+        || session.id.is_empty()
         || !host::on_path(program)
     {
         return;
     }
     let level = effort.map_or("", Effort::explicit);
-    let key = format!("{}/{level}", status.model.id);
-    let record = record_path(&status.session);
+    let key = format!("{}/{level}", session.model.id);
+    let record = PathBuf::from(format!(
+        "{}/claude-statusline-model.{}",
+        host::temp_dir(),
+        session.id.as_str()
+    ));
     let seen = fs::read_to_string(&record).unwrap_or_default();
+    let now = now.as_second();
     if !Record::read(&seen, &key).due(now, report.retry.as_secs())
         || fs::write(&record, format!("{key} sent {now}\n")).is_err()
     {
         return;
     }
-    let field = |name| input.get(name).unwrap_or(&Value::Null);
-    let payload = Payload {
-        hook_event_name: "StatusLine",
-        model: &status.model.id,
-        effort: level,
+    let field = |name| input.get(name).cloned().unwrap_or(Value::Null);
+    let event = Event {
+        hook_event_name: "StatusLine".into(),
+        model: session.model.id.clone(),
+        effort: level.into(),
         session_id: field("session_id"),
         transcript_path: field("transcript_path"),
         cwd: field("cwd"),
     };
-    let Ok(mut payload) = serde_json::to_vec(&payload) else {
+    let delivery = Delivery {
+        record,
+        key,
+        command: report.command.clone(),
+        received: report.received.clone(),
+        event,
+    };
+    let _ = child::detach(SUBCOMMAND, &delivery);
+}
+
+/// The detached child: hands the event to the command and records whether it was taken.
+pub fn deliver(delivery: &Delivery) {
+    let Some((program, args)) = delivery.command.split_first() else {
         return;
     };
-    payload.push(b'\n');
-    let _ = spawn_receipt(&payload, record, &key, report);
-}
-
-fn record_path(session: &str) -> PathBuf {
-    let dir = host::var("TMPDIR").unwrap_or_else(|| "/tmp".into());
-    let dir = dir.strip_suffix('/').unwrap_or(&dir);
-    PathBuf::from(format!("{dir}/claude-statusline-model.{session}"))
-}
-
-fn spawn_receipt(
-    payload: &[u8],
-    record: PathBuf,
-    key: &str,
-    report: &config::Report,
-) -> std::io::Result<()> {
-    let mut child = Command::new(std::env::current_exe()?)
-        .arg(RECEIPT)
-        .arg(record)
-        .arg(key)
-        .arg(&report.received)
-        .args(&report.command)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .map_or(Ok(()), |mut stdin| stdin.write_all(payload))
-}
-
-/// The detached child: hands the payload to the command and records whether it took it.
-pub fn receipt(mut args: impl Iterator<Item = OsString>) {
-    let (Some(record), Some(key), Some(received), Some(program)) =
-        (args.next(), args.next(), args.next(), args.next())
-    else {
-        return;
-    };
-    let mut payload = Vec::new();
-    if std::io::stdin().read_to_end(&mut payload).is_err() {
-        return;
-    }
     let Ok(mut command) = Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
@@ -162,14 +144,17 @@ pub fn receipt(mut args: impl Iterator<Item = OsString>) {
     else {
         return;
     };
-    if let Some(mut stdin) = command.stdin.take() {
-        let _ = stdin.write_all(&payload);
+    if let Some(mut stdin) = command.stdin.take()
+        && let Ok(mut event) = serde_json::to_vec(&delivery.event)
+    {
+        event.push(b'\n');
+        let _ = stdin.write_all(&event);
     }
     let Ok(output) = command.wait_with_output() else {
         return;
     };
-    if String::from_utf8_lossy(&output.stdout).contains(&*received.to_string_lossy()) {
-        let _ = fs::write(record, format!("{} ok\n", key.to_string_lossy()));
+    if String::from_utf8_lossy(&output.stdout).contains(&delivery.received) {
+        let _ = fs::write(&delivery.record, format!("{} ok\n", delivery.key));
     }
 }
 

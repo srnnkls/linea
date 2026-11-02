@@ -16,7 +16,7 @@ $ mkdir -p config/linea && cat > config/linea/linea.toml <<'TOML'
 > sections.branch.icon = "B"
 > sections.duration.icon = "D"
 > sections.cache.icon = "C"
-> sections.misses.icon = "X"
+> sections.cache_misses.icon = "X"
 > sections.context.icons = ["0", "1", "2", "3", "4", "5", "6", "7", "8"]
 > TOML
 ```

@@ -2,18 +2,9 @@
 
 linea renders the Claude Code status line: it reads the session JSON on stdin and prints one line of coloured fields fitted to the terminal width.
 
-## Layout
+## Architecture
 
-- `src/status.rs` parses the input into domain types, reading jq's `//` semantics: null and false are absent.
-- `src/config.rs` loads `assets/config/default.toml` and the linea.toml files merged over it, and validates the result.
-- `src/sections.rs` turns configured sections into parts: built-in texts from the session, hook texts through a callback.
-- `src/template.rs` renders section templates (minijinja) over the status JSON, the built-in texts, the environment and hook output.
-- `src/line.rs` fits parts into the width by `fit` and draws them.
-- `src/hooks.rs` serves hook output from a per-session cache and refreshes it in a detached `linea --hook` child.
-- `src/host.rs` reads the machine: terminal width, repository (gix), settings, macOS appearance, herdr.
-- `src/report.rs` sends model and effort changes to the configured command through a detached `linea --receipt` child.
-
-Effects stay in `host`, `hooks` and `report`; `status`, `sections`, `template` and `line` take values and return values.
+Functional core, imperative shell: `main` gathers every effect into a `World` (repository, terminal, appearance, environment, hook output), then the line is a pure function of the session, the configuration and that world. Input is parsed into domain types once, at the boundary: the status JSON into `Session`, linea.toml into a validated `Config`, messages to detached children into typed structs.
 
 ## Rules
 

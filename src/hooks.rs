@@ -3,157 +3,91 @@
 //! that the next render picks up.
 
 use std::{
-    ffi::OsString,
     fs,
     io::{Read, Write},
-    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant, SystemTime},
 };
 
 use jiff::SignedDuration;
+use serde::{Deserialize, Serialize};
 
-use crate::host;
+use crate::{child, config::Hook, host, session::SessionId};
 
-/// The hidden argument that runs a hook in a detached child.
-pub const HOOK: &str = "--hook";
+pub const SUBCOMMAND: &str = "refresh";
 
-/// What a hook sees of the session: the JSON Claude Code sent, and where it runs.
-pub struct Session<'a> {
-    pub id: &'a str,
-    pub input: &'a [u8],
-    pub dir: &'a str,
+/// What a detached child needs to run one hook.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Refresh {
+    pub cache: PathBuf,
+    pub section: String,
+    pub command: String,
+    pub dir: String,
+    pub timeout: Duration,
+    /// The status JSON exactly as Claude Code sent it.
+    pub input: String,
 }
 
-pub struct Hook<'a> {
-    pub name: &'a str,
-    pub run: &'a str,
-    pub refresh: SignedDuration,
-    pub timeout: SignedDuration,
-}
-
-/// The hook's last output, refreshing it in the background once it is older than `refresh`.
-pub fn text(hook: &Hook<'_>, session: &Session<'_>) -> Option<String> {
-    let cache = cache_dir().join(format!("{}.{}", hook.name, key(session.id)));
-    let cached = fs::read_to_string(&cache).ok();
-    if age(&cache).is_none_or(|age| age >= hook.refresh) && !pending(&cache, hook.timeout) {
-        let _ = spawn(hook, session, &cache);
-    }
-    cached.filter(|text| !text.is_empty())
-}
-
-fn cache_dir() -> PathBuf {
-    host::var("XDG_CACHE_HOME")
-        .map_or_else(|| host::home().join(".cache"), PathBuf::from)
-        .join("linea")
+/// The hook's last output, refreshed in the background once older than its `refresh`.
+pub fn cached(
+    section: &str,
+    hook: &Hook,
+    session: &SessionId,
+    dir: &str,
+    input: &str,
+) -> Option<String> {
+    let cache = host::cache_dir()
         .join("hooks")
+        .join(format!("{section}.{}", session.file_name()));
+    let output = fs::read_to_string(&cache).ok();
+    if age(&cache).is_none_or(|age| age >= hook.refresh) && !pending(&cache, hook.timeout) {
+        let refresh = Refresh {
+            cache: cache.clone(),
+            section: section.to_owned(),
+            command: hook.command.clone(),
+            dir: dir.to_owned(),
+            timeout: hook.timeout.unsigned_abs(),
+            input: input.to_owned(),
+        };
+        let _ = start(&refresh);
+    }
+    output.filter(|output| !output.is_empty())
 }
 
-fn key(session: &str) -> String {
-    let key: String = session
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if key.is_empty() { "none".into() } else { key }
-}
-
-fn age(path: &Path) -> Option<SignedDuration> {
-    let modified = fs::metadata(path).and_then(|meta| meta.modified()).ok()?;
-    let age = SystemTime::now()
-        .duration_since(modified)
-        .unwrap_or_default();
-    SignedDuration::try_from(age).ok()
-}
-
-fn pending_path(cache: &Path) -> PathBuf {
-    beside(cache, ".pending")
-}
-
-fn beside(cache: &Path, suffix: &str) -> PathBuf {
-    let mut path = cache.as_os_str().to_owned();
-    path.push(suffix);
-    PathBuf::from(path)
-}
-
-/// A refresh already running, unless it outlived its timeout.
-fn pending(cache: &Path, timeout: SignedDuration) -> bool {
-    age(&pending_path(cache)).is_some_and(|age| age < timeout + SignedDuration::from_secs(1))
-}
-
-fn spawn(hook: &Hook<'_>, session: &Session<'_>, cache: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(cache_dir())?;
-    fs::write(pending_path(cache), [])?;
-    let timeout = u64::try_from(hook.timeout.as_millis()).unwrap_or(0);
-    let mut child = Command::new(std::env::current_exe()?)
-        .arg(HOOK)
-        .arg(cache)
-        .arg(timeout.to_string())
-        .arg(session.dir)
-        .arg(hook.name)
-        .arg(hook.run)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .map_or(Ok(()), |mut stdin| stdin.write_all(session.input))
+fn start(refresh: &Refresh) -> std::io::Result<()> {
+    if let Some(dir) = refresh.cache.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(beside(&refresh.cache, ".pending"), [])?;
+    child::detach(SUBCOMMAND, refresh)
 }
 
 /// The detached child: runs the hook within its timeout and caches the first line it prints.
-pub fn refresh(mut args: impl Iterator<Item = OsString>) {
-    let (Some(cache), Some(timeout), Some(dir), Some(name), Some(run)) = (
-        args.next(),
-        args.next(),
-        args.next(),
-        args.next(),
-        args.next(),
-    ) else {
-        return;
-    };
-    let cache = PathBuf::from(cache);
-    let timeout = Duration::from_millis(timeout.to_string_lossy().parse().unwrap_or(0));
-    let mut input = Vec::new();
-    let _ = std::io::stdin().read_to_end(&mut input);
-
-    let text = execute(&run, &dir, &name, &input, timeout).unwrap_or_default();
-    let partial = beside(&cache, ".partial");
-    if fs::write(&partial, text).is_ok() {
-        let _ = fs::rename(&partial, &cache);
+pub fn refresh(refresh: &Refresh) {
+    let output = run(refresh).unwrap_or_default();
+    let partial = beside(&refresh.cache, ".partial");
+    if fs::write(&partial, output).is_ok() {
+        let _ = fs::rename(&partial, &refresh.cache);
     }
-    let _ = fs::remove_file(pending_path(&cache));
+    let _ = fs::remove_file(beside(&refresh.cache, ".pending"));
 }
 
-fn execute(
-    run: &OsString,
-    dir: &OsString,
-    name: &OsString,
-    input: &[u8],
-    timeout: Duration,
-) -> Option<String> {
+fn run(refresh: &Refresh) -> Option<String> {
     let mut command = Command::new("sh");
     command
         .arg("-c")
-        .arg(run)
-        .env("LINEA_SECTION", name)
+        .arg(&refresh.command)
+        .env("LINEA_SECTION", &refresh.section)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    if Path::new(dir).is_dir() {
-        command.current_dir(dir);
+    if Path::new(&refresh.dir).is_dir() {
+        command.current_dir(&refresh.dir);
     }
     let mut child = command.spawn().ok()?;
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input);
+        let _ = stdin.write_all(refresh.input.as_bytes());
     }
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
@@ -162,7 +96,7 @@ fn execute(
         out
     });
 
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now() + refresh.timeout;
     let status = loop {
         if let Some(status) = child.try_wait().ok()? {
             break status;
@@ -175,50 +109,30 @@ fn execute(
         std::thread::sleep(Duration::from_millis(10));
     };
     let out = reader.join().ok()?;
-    status.success().then(|| {
-        String::from_utf8_lossy(&out)
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .trim_end()
-            .to_owned()
-    })
+    status
+        .success()
+        .then(|| first_line(&String::from_utf8_lossy(&out)))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn first_line(out: &str) -> String {
+    out.lines().next().unwrap_or_default().trim_end().to_owned()
+}
 
-    #[test]
-    fn a_session_key_is_a_safe_file_name() {
-        assert_eq!(key("a1b2-c3"), "a1b2-c3");
-        assert_eq!(key("../x"), "___x");
-        assert_eq!(key(""), "none");
-    }
+fn age(path: &Path) -> Option<SignedDuration> {
+    let modified = fs::metadata(path).and_then(|meta| meta.modified()).ok()?;
+    let age = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default();
+    SignedDuration::try_from(age).ok()
+}
 
-    #[test]
-    fn a_hook_prints_its_first_line_within_its_timeout() {
-        let run = |cmd: &str, timeout| {
-            execute(
-                &cmd.into(),
-                &"/".into(),
-                &"t".into(),
-                b"{\"a\":1}",
-                Duration::from_millis(timeout),
-            )
-        };
-        assert_eq!(run("printf 'hi  \\nthere'", 2000).as_deref(), Some("hi"));
-        assert_eq!(run("cat", 2000).as_deref(), Some("{\"a\":1}"));
-        assert_eq!(run("echo $LINEA_SECTION", 2000).as_deref(), Some("t"));
-        assert_eq!(run("exit 1", 2000), None);
-        assert_eq!(run("sleep 2", 50), None);
-    }
+/// A refresh already running, unless it outlived its timeout.
+fn pending(cache: &Path, timeout: SignedDuration) -> bool {
+    age(&beside(cache, ".pending")).is_some_and(|age| age < timeout + SignedDuration::from_secs(1))
+}
 
-    #[test]
-    fn the_pending_marker_sits_beside_the_cache() {
-        assert_eq!(
-            pending_path(Path::new("/c/weather.s1")),
-            Path::new("/c/weather.s1.pending")
-        );
-    }
+fn beside(cache: &Path, suffix: &str) -> PathBuf {
+    let mut path = cache.as_os_str().to_owned();
+    path.push(suffix);
+    PathBuf::from(path)
 }

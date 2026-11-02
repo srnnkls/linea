@@ -70,3 +70,16 @@ $ until [ -e cache/linea/hooks/slow.s1 ]; do sleep 0.1; done; wc -c < cache/line
 0
 M Opus
 ```
+
+A command that fails caches nothing to show either.
+
+```scrut
+$ printf '[line]\nsections = ["model", "broken"]\n[sections.broken]\nrun = "echo partial; exit 1"\ncolour = "grey"\nfit = 1\n' > app/linea.local.toml && line < session.json
+M Opus
+```
+
+```scrut
+$ until [ -e cache/linea/hooks/broken.s1 ]; do sleep 0.1; done; wc -c < cache/linea/hooks/broken.s1 | tr -d ' '; line < session.json
+0
+M Opus
+```

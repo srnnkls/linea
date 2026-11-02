@@ -3,7 +3,7 @@
 
 [line]
 # Sections drawn, left to right.
-sections = ["model", "effort", "project", "branch", "pane", "duration", "cache", "misses", "context"]
+sections = ["model", "effort", "project", "branch", "pane", "duration", "cache", "cache_misses", "context"]
 separator = "  "
 # Between a section's icon and its text.
 gap = " "
@@ -65,7 +65,7 @@ colour = "grey"
 fit = 6
 format = "%d %b %H:%M"
 
-[sections.misses]
+[sections.cache_misses]
 icon = "\U000F1635"
 colour = "red"
 fit = "always"
