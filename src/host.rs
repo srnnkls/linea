@@ -1,17 +1,91 @@
-//! Reads from the machine around the session: terminal, repository, settings, appearance.
+//! Reads from the machine around the session: environment, terminal, settings, appearance.
 
-use std::{env, fs::File, path::PathBuf};
+use std::{collections::BTreeMap, env, fs::File, path::PathBuf};
 
+use jiff::tz::TimeZone;
 use serde_json::Value;
 
 use crate::{
-    config::{self, Mode},
-    line::Appearance,
-    status::Effort,
+    config::{self, Appearance, Mode},
+    session::Effort,
 };
 
+/// An environment variable, with an empty value counting as unset.
+pub fn var(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+pub fn home() -> PathBuf {
+    env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+}
+
+/// The global linea.toml: `LINEA_CONFIG`, else under the XDG config home.
+pub fn global_config() -> PathBuf {
+    var("LINEA_CONFIG").map_or_else(
+        || {
+            var("XDG_CONFIG_HOME")
+                .map_or_else(|| home().join(".config"), PathBuf::from)
+                .join("linea/linea.toml")
+        },
+        PathBuf::from,
+    )
+}
+
+pub fn cache_dir() -> PathBuf {
+    var("XDG_CACHE_HOME")
+        .map_or_else(|| home().join(".cache"), PathBuf::from)
+        .join("linea")
+}
+
+pub fn temp_dir() -> String {
+    let dir = var("TMPDIR").unwrap_or_else(|| "/tmp".into());
+    dir.strip_suffix('/').unwrap_or(&dir).to_owned()
+}
+
+/// Where the line is drawn.
+#[derive(Debug, Clone)]
+pub struct Terminal {
+    pub columns: i64,
+    pub appearance: Appearance,
+    pub zone: TimeZone,
+}
+
+impl Terminal {
+    pub fn observe(mode: Mode) -> Self {
+        Self {
+            columns: columns(),
+            appearance: appearance(mode),
+            zone: TimeZone::system(),
+        }
+    }
+}
+
+/// The herdr pane the session runs in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pane(pub String);
+
+impl Pane {
+    /// The pane, while the session runs inside a herdr that is up.
+    pub fn observe(herdr: &config::Herdr) -> Option<Self> {
+        let inside = var(&herdr.inside).is_some_and(|flag| flag == "1");
+        let live = var(&herdr.socket).is_some_and(|socket| std::path::Path::new(&socket).exists());
+        if herdr.enabled && inside && live {
+            var(&herdr.pane).map(Self)
+        } else {
+            None
+        }
+    }
+}
+
+/// The environment, for templates to read; an entry that is not UTF-8 is left out.
+pub fn vars() -> BTreeMap<String, String> {
+    env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
 /// Terminal columns: `COLUMNS`, else the controlling terminal, else 80.
-pub fn columns() -> i64 {
+fn columns() -> i64 {
     match var("COLUMNS") {
         Some(columns) => columns.trim().parse().unwrap_or(0),
         None => File::open("/dev/tty")
@@ -19,89 +93,6 @@ pub fn columns() -> i64 {
             .and_then(|tty| rustix::termios::tcgetwinsize(&tty).ok())
             .map_or(80, |size| i64::from(size.ws_col)),
     }
-}
-
-/// The project named by the repository's main worktree, else by the directory itself.
-pub fn workspace(dir: &str) -> (String, String) {
-    let Ok(repo) = gix::discover_with_environment_overrides(dir) else {
-        return (basename(dir).to_owned(), String::new());
-    };
-    let common =
-        std::fs::canonicalize(repo.common_dir()).unwrap_or_else(|_| repo.common_dir().to_owned());
-    let root = common.parent().map_or_else(
-        || "/".to_owned(),
-        |parent| basename(&parent.to_string_lossy()).to_owned(),
-    );
-    let branch = repo
-        .head_name()
-        .ok()
-        .flatten()
-        .and_then(|name| {
-            name.as_bstr()
-                .strip_prefix(b"refs/heads/")
-                .map(|b| String::from_utf8_lossy(b).into_owned())
-        })
-        .unwrap_or_default();
-    (root, branch)
-}
-
-/// The herdr pane the session runs in, while herdr itself is up.
-pub fn herdr_pane(herdr: &config::Herdr) -> Option<String> {
-    let inside = var(&herdr.inside).is_some_and(|flag| flag == "1");
-    let live = var(&herdr.socket).is_some_and(|socket| std::path::Path::new(&socket).exists());
-    if herdr.enabled && inside && live {
-        var(&herdr.pane)
-    } else {
-        None
-    }
-}
-
-/// The configured level when the session reports none.
-pub fn effort(claude: &config::Claude) -> Option<Effort> {
-    if let Some(level) = var(&claude.effort) {
-        return Effort::new(level);
-    }
-    let path = claude.settings.as_deref().map_or_else(
-        || config_dir().join("settings.json"),
-        |path| match path.strip_prefix("~") {
-            Ok(rest) => home().join(rest),
-            Err(_) => path.to_owned(),
-        },
-    );
-    let settings = std::fs::read(path).ok()?;
-    let settings: Value = serde_json::from_slice(&settings).ok()?;
-    let level = match settings.get("effortLevel") {
-        None | Some(Value::Null | Value::Bool(false)) => "default".to_owned(),
-        Some(Value::String(level)) => level.clone(),
-        Some(level) => level.to_string(),
-    };
-    Effort::new(level)
-}
-
-/// The global linea.toml: `LINEA_CONFIG`, else under the XDG config home.
-pub fn linea_config() -> PathBuf {
-    var("LINEA_CONFIG").map_or_else(
-        || {
-            var("XDG_CONFIG_HOME")
-                .map_or_else(|| home().join(".config"), PathBuf::from)
-                .join("linea")
-                .join("linea.toml")
-        },
-        PathBuf::from,
-    )
-}
-
-fn config_dir() -> PathBuf {
-    var("CLAUDE_CONFIG_DIR").map_or_else(|| home().join(".claude"), PathBuf::from)
-}
-
-pub fn home() -> PathBuf {
-    env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
-}
-
-/// An environment variable, with an empty value counting as unset.
-pub fn var(name: &str) -> Option<String> {
-    env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 /// Whether an executable of this name is on `PATH`.
@@ -115,26 +106,67 @@ pub fn on_path(name: &str) -> bool {
     })
 }
 
-/// The last path component, as `basename` gives it.
-fn basename(path: &str) -> &str {
-    let trimmed = path.trim_end_matches('/');
-    if trimmed.is_empty() {
-        return if path.is_empty() { "" } else { "/" };
+/// The configured effort level, for a session that reports none.
+pub fn effort(claude: &config::Claude) -> Option<Effort> {
+    if let Some(level) = var(&claude.effort) {
+        return Effort::new(level);
     }
-    trimmed.rsplit('/').next().unwrap_or(trimmed)
+    let path = claude.settings.as_deref().map_or_else(
+        || {
+            var("CLAUDE_CONFIG_DIR")
+                .map_or_else(|| home().join(".claude"), PathBuf::from)
+                .join("settings.json")
+        },
+        |path| match path.strip_prefix("~") {
+            Ok(rest) => home().join(rest),
+            Err(_) => path.to_owned(),
+        },
+    );
+    let settings: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let level = match settings.get("effortLevel") {
+        None | Some(Value::Null | Value::Bool(false)) => "default".to_owned(),
+        Some(Value::String(level)) => level.clone(),
+        Some(level) => level.to_string(),
+    };
+    Effort::new(level)
 }
 
-pub fn appearance(mode: Mode) -> Appearance {
+fn appearance(mode: Mode) -> Appearance {
     match mode {
-        Mode::Auto => Appearance::from_style(interface_style().as_deref()),
+        Mode::Auto => system_appearance(),
         Mode::Dark => Appearance::Dark,
         Mode::Light => Appearance::Light,
     }
 }
 
-/// The global `AppleInterfaceStyle` preference, as `defaults read -g` gives it.
+/// macOS always answers: the interface style is dark or it is light.
 #[cfg(target_os = "macos")]
-fn interface_style() -> Option<String> {
+fn system_appearance() -> Appearance {
+    interface_style()
+}
+
+/// The desktop's preference, else the terminal's background, else light.
+#[cfg(not(target_os = "macos"))]
+fn system_appearance() -> Appearance {
+    desktop_appearance()
+        .or_else(|| var("COLORFGBG").and_then(|colours| terminal_appearance(&colours)))
+        .unwrap_or(Appearance::Light)
+}
+
+/// The background a terminal announces in `COLORFGBG` (`fg;bg`): ANSI 0–6 and 8 are dark.
+#[cfg(any(not(target_os = "macos"), test))]
+fn terminal_appearance(colours: &str) -> Option<Appearance> {
+    match colours.rsplit(';').next()?.parse::<u8>().ok()? {
+        0..=6 | 8 => Some(Appearance::Dark),
+        7 | 9..=15 => Some(Appearance::Light),
+        _ => None,
+    }
+}
+
+/// The global `AppleInterfaceStyle` preference, as `defaults read -g` gives it:
+/// `Dark`, or unset for light.
+#[cfg(target_os = "macos")]
+fn interface_style() -> Appearance {
     use core_foundation::{
         base::{CFType, TCFType},
         string::CFString,
@@ -149,27 +181,71 @@ fn interface_style() -> Option<String> {
         CFPreferencesCopyAppValue(key.as_concrete_TypeRef(), kCFPreferencesAnyApplication)
     };
     if value.is_null() {
-        return None;
+        return Appearance::Light;
     }
     // SAFETY: a non-null result of a Copy function is owned by the caller.
     let value = unsafe { CFType::wrap_under_create_rule(value) };
-    value.downcast::<CFString>().map(|style| style.to_string())
+    let dark = value
+        .downcast::<CFString>()
+        .is_some_and(|style| style == "Dark");
+    if dark {
+        Appearance::Dark
+    } else {
+        Appearance::Light
+    }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn interface_style() -> Option<String> {
+/// The freedesktop settings portal's `color-scheme`: 1 prefers dark, 2 light, 0 neither.
+#[cfg(target_os = "linux")]
+fn desktop_appearance() -> Option<Appearance> {
+    use zbus::{blocking::connection::Builder, zvariant::Value};
+
+    fn scheme(value: &Value<'_>) -> Option<u32> {
+        match value {
+            Value::U32(scheme) => Some(*scheme),
+            Value::Value(inner) => scheme(inner),
+            _ => None,
+        }
+    }
+
+    let connection = Builder::session()
+        .ok()?
+        .method_timeout(std::time::Duration::from_millis(200))
+        .build()
+        .ok()?;
+    let read = |method| {
+        connection
+            .call_method(
+                Some("org.freedesktop.portal.Desktop"),
+                "/org/freedesktop/portal/desktop",
+                Some("org.freedesktop.portal.Settings"),
+                method,
+                &("org.freedesktop.appearance", "color-scheme"),
+            )
+            .ok()
+    };
+    let reply = read("ReadOne").or_else(|| read("Read"))?;
+    let value: zbus::zvariant::OwnedValue = reply.body().deserialize().ok()?;
+    match scheme(&value)? {
+        1 => Some(Appearance::Dark),
+        2 => Some(Appearance::Light),
+        _ => None,
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn desktop_appearance() -> Option<Appearance> {
     None
 }
 
 #[cfg(test)]
 mod tests {
-    use super::basename;
+    use super::*;
 
     #[test]
-    fn basename_follows_the_shell() {
-        assert_eq!(basename("/a/b/"), "b");
-        assert_eq!(basename("/"), "/");
-        assert_eq!(basename("."), ".");
-        assert_eq!(basename(""), "");
+    fn colorfgbg_names_the_background_last() {
+        assert_eq!(terminal_appearance("15;0"), Some(Appearance::Dark));
+        assert_eq!(terminal_appearance("0;default;15"), Some(Appearance::Light));
+        assert_eq!(terminal_appearance("15;default"), None);
     }
 }

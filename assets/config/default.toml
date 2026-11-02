@@ -3,7 +3,7 @@
 
 [line]
 # Sections drawn, left to right.
-sections = ["model", "effort", "project", "branch", "pane", "duration", "cache", "misses", "context"]
+sections = ["model", "effort", "project", "branch", "pane", "duration", "cache", "cache_misses", "context"]
 separator = "  "
 # Between a section's icon and its text.
 gap = " "
@@ -33,11 +33,13 @@ grey = "#8a8e93"
 icon = "\U000F035B"
 colour = "orange"
 fit = "always"
+emit = true
 
 [sections.effort]
 icon = "\U000F140B"
 colour = "grey"
 fit = 2
+emit = true
 
 [sections.project]
 icon = "\uEA83"
@@ -65,16 +67,20 @@ colour = "grey"
 fit = 6
 format = "%d %b %H:%M"
 
-[sections.misses]
+[sections.cache_misses]
 icon = "\U000F1635"
 colour = "red"
 fit = "always"
 
 [sections.context]
-# The pie fills by eighths, full only at 100%.
-icons = ["\U000F0130", "\U000F0A9E", "\U000F0A9F", "\U000F0AA0", "\U000F0AA1", "\U000F0AA2", "\U000F0AA3", "\U000F0AA4", "\U000F0AA5"]
 colour = "grey"
 fit = "always"
+
+# A pie that fills by eighths, full only at 100%.
+[sections.context.icon]
+state = "context_window.used_percentage"
+default = "\U000F0130"
+at = { 0 = "\U000F0130", 7 = "\U000F0A9E", 19 = "\U000F0A9F", 32 = "\U000F0AA0", 44 = "\U000F0AA1", 57 = "\U000F0AA2", 69 = "\U000F0AA3", 82 = "\U000F0AA4", 100 = "\U000F0AA5" }
 
 # The pane section shows only inside a running herdr.
 [herdr]
@@ -83,11 +89,13 @@ inside = "HERDR_ENV"
 pane = "HERDR_PANE_ID"
 socket = "HERDR_SOCKET_PATH"
 
-# Model and effort changes go to this command as a StatusLine hook event on stdin.
-[report]
+# When the text of a section with `emit = true` changes, the rendered body
+# goes to this command on stdin; docs/events.md describes the protocol.
+[events]
 enabled = true
 command = ["limen", "hook", "claude"]
-received = '"received":true'
+body = '''{"hook_event_name":"StatusLine","model":{{ model.id | default("") | tojson }},"effort":{{ ("" if linea.effort == "default" else linea.effort) | tojson }},"session_id":{{ session_id | default(none) | tojson }},"transcript_path":{{ transcript_path | default(none) | tojson }},"cwd":{{ cwd | default(none) | tojson }}}'''
+acknowledge = { marker = '"received":true' }
 retry = "30s"
 requires = "HERDR_PANE_ID"
 

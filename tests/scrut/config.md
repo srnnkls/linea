@@ -67,8 +67,8 @@ $ printf '[line]\nsections = ["model"]\n[sections.model]\ncolour = "#102030"\n' 
 ```
 
 ```scrut
-$ printf '[appearance]\nmode = "light"\n[line]\nsections = ["model"]\n' > work/app/linea.local.toml && linea < session.json | cat -v | cut -d m -f 1
-^[[38;2;215;119;87
+$ printf '[appearance]\nmode = "light"\n[line]\nsections = ["project"]\n' > work/app/linea.local.toml && linea < session.json | cat -v | cut -d m -f 1
+^[[38;2;95;130;196
 ```
 
 A broken configuration shows its error in place of the line.
@@ -88,9 +88,25 @@ $ printf 'sections.model.fit = "never"\n' > work/app/linea.local.toml && line < 
 linea: linea.toml: fit is "always", a rank or a table, not `never`
 ```
 
-`linea defaults` prints the built-in configuration.
+A key outside the section it belongs to is an error, not ignored.
 
 ```scrut
-$ linea defaults | grep -c '^\[sections\.'
-9
+$ printf 'sections.model.format = "%%H"\n' > work/app/linea.local.toml && line < session.json
+linea: sections.model.format applies only to the cache section
+```
+
+`linea defaults` prints the configuration linea starts from: as the only file, it draws the same line.
+
+```scrut
+$ rm work/app/linea.local.toml work/app/linea.toml work/linea.toml && linea defaults > defaults.toml && [ "$(XDG_CONFIG_HOME="$PWD/none" linea < session.json)" = "$(LINEA_CONFIG="$PWD/defaults.toml" linea < session.json)" ] && echo same
+same
+```
+
+Anything else on the command line is an error.
+
+```scrut
+$ linea --nope 2>&1
+error: unexpected argument '--nope' found
+* (glob+)
+[2]
 ```

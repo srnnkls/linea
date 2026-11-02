@@ -1,79 +1,105 @@
+mod child;
 mod config;
+mod events;
+mod format;
 mod hooks;
 mod host;
 mod line;
-mod report;
 mod sections;
-mod status;
+mod session;
 mod template;
+mod workspace;
 
 use std::{io::Read, path::Path};
 
-use jiff::{Timestamp, tz::TimeZone};
+use clap::{Parser, Subcommand};
+use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::{
-    config::Config,
-    hooks::{Hook, Session},
-    sections::Surroundings,
-    status::Status,
+    hooks::HookOutputs,
+    host::{Pane, Terminal},
+    sections::BuiltInTexts,
+    session::Session,
+    template::Scope,
+    workspace::Workspace,
 };
 
+/// A status line for Claude Code: reads the session's status JSON on stdin
+/// and prints one line fitted to the terminal.
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Print the built-in configuration.
+    Defaults,
+    /// Deliver an event; started detached by linea itself.
+    #[command(name = events::SUBCOMMAND, hide = true)]
+    Deliver,
+    /// Run a hook and cache its output; started detached by linea itself.
+    #[command(name = hooks::SUBCOMMAND, hide = true)]
+    Refresh,
+}
+
 fn main() {
-    let mut args = std::env::args_os().skip(1);
-    match args.next() {
-        Some(arg) if arg == report::RECEIPT => return report::receipt(args),
-        Some(arg) if arg == hooks::HOOK => return hooks::refresh(args),
-        Some(arg) if arg == "defaults" => return print!("{}", config::DEFAULTS),
-        _ => {}
+    match Cli::parse().command {
+        None => println!("{}", status_line(&stdin())),
+        Some(Command::Defaults) => print!("{}", config::DEFAULTS),
+        Some(Command::Deliver) => {
+            if let Some(delivery) = child::receive() {
+                events::deliver(&delivery);
+            }
+        }
+        Some(Command::Refresh) => {
+            if let Some(refresh) = child::receive() {
+                hooks::refresh(&refresh);
+            }
+        }
     }
+}
 
-    let mut raw = Vec::new();
-    let _ = std::io::stdin().read_to_end(&mut raw);
-    let input: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
-    let status = Status::parse(&input);
-    let config = match Config::load(Some(&host::linea_config()), Path::new(&status.dir)) {
+fn stdin() -> String {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    input
+}
+
+/// The effects first, each read once into a domain value; then the line as a
+/// pure function of them.
+fn status_line(raw: &str) -> String {
+    let input: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+    let parsed = Session::parse(&input);
+    let config = match config::load(Some(&host::global_config()), Path::new(&parsed.dir)) {
         Ok(config) => config,
-        Err(error) => return println!("\x1b[31mlinea: {error}\x1b[0m"),
+        Err(error) => return format!("\x1b[31mlinea: {error}\x1b[0m"),
     };
-    let effort = status
-        .effort
-        .clone()
-        .or_else(|| host::effort(&config.claude));
+    let session = parsed.or_effort(|| host::effort(&config.claude));
+    let terminal = Terminal::observe(config.mode);
+    let workspace = Workspace::locate(&session.dir);
+    let pane = Pane::observe(&config.herdr);
+    let outputs = HookOutputs::read(&config, &session, raw);
 
-    report::model(
-        &config.report,
-        &input,
-        &status,
-        effort.as_ref(),
-        Timestamp::now().as_second(),
+    let texts = BuiltInTexts::new(
+        &config.built_ins,
+        &session,
+        &workspace,
+        pane.as_ref(),
+        &terminal.zone,
     );
+    let scope = Scope::new(&input, &texts.for_templates(), host::vars(), &terminal.zone);
+    let parts = sections::parts(&config, &texts, &outputs, &scope, terminal.appearance);
 
-    let (root, branch) = host::workspace(&status.dir);
-    let around = Surroundings {
-        appearance: host::appearance(config.appearance.mode),
-        root,
-        branch,
-        effort,
-        pane: host::herdr_pane(&config.herdr),
-        zone: TimeZone::system(),
-    };
-    let session = Session {
-        id: &status.session,
-        input: &raw,
-        dir: &status.dir,
-    };
-    let parts = sections::parts(&config, &status, &around, &input, |name, section| {
-        let run = section.run.as_deref()?;
-        hooks::text(
-            &Hook {
-                name,
-                run,
-                refresh: section.refresh,
-                timeout: section.timeout,
-            },
-            &session,
-        )
-    });
-    println!("{}", line::render(&parts, host::columns(), &config.line));
+    events::send(
+        &config.events,
+        events::state(&config, &parts).as_deref(),
+        &scope,
+        &session.id,
+        Timestamp::now(),
+    );
+    line::render(&parts, terminal.columns, &config.line)
 }
