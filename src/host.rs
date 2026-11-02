@@ -133,15 +133,40 @@ pub fn effort(claude: &config::Claude) -> Option<Effort> {
 
 fn appearance(mode: Mode) -> Appearance {
     match mode {
-        Mode::Auto if interface_style().as_deref() == Some("Dark") => Appearance::Dark,
-        Mode::Auto | Mode::Light => Appearance::Light,
+        Mode::Auto => system_appearance(),
         Mode::Dark => Appearance::Dark,
+        Mode::Light => Appearance::Light,
     }
 }
 
-/// The global `AppleInterfaceStyle` preference, as `defaults read -g` gives it.
+/// macOS always answers: the interface style is dark or it is light.
 #[cfg(target_os = "macos")]
-fn interface_style() -> Option<String> {
+fn system_appearance() -> Appearance {
+    interface_style()
+}
+
+/// The desktop's preference, else the terminal's background, else light.
+#[cfg(not(target_os = "macos"))]
+fn system_appearance() -> Appearance {
+    desktop_appearance()
+        .or_else(|| var("COLORFGBG").and_then(|colours| terminal_appearance(&colours)))
+        .unwrap_or(Appearance::Light)
+}
+
+/// The background a terminal announces in `COLORFGBG` (`fg;bg`): ANSI 0–6 and 8 are dark.
+#[cfg(any(not(target_os = "macos"), test))]
+fn terminal_appearance(colours: &str) -> Option<Appearance> {
+    match colours.rsplit(';').next()?.parse::<u8>().ok()? {
+        0..=6 | 8 => Some(Appearance::Dark),
+        7 | 9..=15 => Some(Appearance::Light),
+        _ => None,
+    }
+}
+
+/// The global `AppleInterfaceStyle` preference, as `defaults read -g` gives it:
+/// `Dark`, or unset for light.
+#[cfg(target_os = "macos")]
+fn interface_style() -> Appearance {
     use core_foundation::{
         base::{CFType, TCFType},
         string::CFString,
@@ -156,14 +181,71 @@ fn interface_style() -> Option<String> {
         CFPreferencesCopyAppValue(key.as_concrete_TypeRef(), kCFPreferencesAnyApplication)
     };
     if value.is_null() {
-        return None;
+        return Appearance::Light;
     }
     // SAFETY: a non-null result of a Copy function is owned by the caller.
     let value = unsafe { CFType::wrap_under_create_rule(value) };
-    value.downcast::<CFString>().map(|style| style.to_string())
+    let dark = value
+        .downcast::<CFString>()
+        .is_some_and(|style| style == "Dark");
+    if dark {
+        Appearance::Dark
+    } else {
+        Appearance::Light
+    }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn interface_style() -> Option<String> {
+/// The freedesktop settings portal's `color-scheme`: 1 prefers dark, 2 light, 0 neither.
+#[cfg(target_os = "linux")]
+fn desktop_appearance() -> Option<Appearance> {
+    use zbus::{blocking::connection::Builder, zvariant::Value};
+
+    fn scheme(value: &Value<'_>) -> Option<u32> {
+        match value {
+            Value::U32(scheme) => Some(*scheme),
+            Value::Value(inner) => scheme(inner),
+            _ => None,
+        }
+    }
+
+    let connection = Builder::session()
+        .ok()?
+        .method_timeout(std::time::Duration::from_millis(200))
+        .build()
+        .ok()?;
+    let read = |method| {
+        connection
+            .call_method(
+                Some("org.freedesktop.portal.Desktop"),
+                "/org/freedesktop/portal/desktop",
+                Some("org.freedesktop.portal.Settings"),
+                method,
+                &("org.freedesktop.appearance", "color-scheme"),
+            )
+            .ok()
+    };
+    let reply = read("ReadOne").or_else(|| read("Read"))?;
+    let value: zbus::zvariant::OwnedValue = reply.body().deserialize().ok()?;
+    match scheme(&value)? {
+        1 => Some(Appearance::Dark),
+        2 => Some(Appearance::Light),
+        _ => None,
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn desktop_appearance() -> Option<Appearance> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colorfgbg_names_the_background_last() {
+        assert_eq!(terminal_appearance("15;0"), Some(Appearance::Dark));
+        assert_eq!(terminal_appearance("0;default;15"), Some(Appearance::Light));
+        assert_eq!(terminal_appearance("15;default"), None);
+    }
 }
