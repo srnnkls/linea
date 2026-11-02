@@ -1,7 +1,8 @@
 //! Reads from the machine around the session: environment, terminal, settings, appearance.
 
-use std::{env, fs::File, path::PathBuf};
+use std::{collections::BTreeMap, env, fs::File, path::PathBuf};
 
+use jiff::tz::TimeZone;
 use serde_json::Value;
 
 use crate::{
@@ -41,8 +42,48 @@ pub fn temp_dir() -> String {
     dir.strip_suffix('/').unwrap_or(&dir).to_owned()
 }
 
+/// Where the line is drawn.
+#[derive(Debug, Clone)]
+pub struct Terminal {
+    pub columns: i64,
+    pub appearance: Appearance,
+    pub zone: TimeZone,
+}
+
+impl Terminal {
+    pub fn observe(mode: Mode) -> Self {
+        Self {
+            columns: columns(),
+            appearance: appearance(mode),
+            zone: TimeZone::system(),
+        }
+    }
+}
+
+/// The herdr pane the session runs in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pane(pub String);
+
+impl Pane {
+    /// The pane, while the session runs inside a herdr that is up.
+    pub fn observe(herdr: &config::Herdr) -> Option<Self> {
+        let inside = var(&herdr.inside).is_some_and(|flag| flag == "1");
+        let live = var(&herdr.socket).is_some_and(|socket| std::path::Path::new(&socket).exists());
+        if herdr.enabled && inside && live {
+            var(&herdr.pane).map(Self)
+        } else {
+            None
+        }
+    }
+}
+
+/// The environment, for templates to read.
+pub fn vars() -> BTreeMap<String, String> {
+    env::vars().collect()
+}
+
 /// Terminal columns: `COLUMNS`, else the controlling terminal, else 80.
-pub fn columns() -> i64 {
+fn columns() -> i64 {
     match var("COLUMNS") {
         Some(columns) => columns.trim().parse().unwrap_or(0),
         None => File::open("/dev/tty")
@@ -61,17 +102,6 @@ pub fn on_path(name: &str) -> bool {
                 .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
         })
     })
-}
-
-/// The herdr pane the session runs in, while herdr itself is up.
-pub fn herdr_pane(herdr: &config::Herdr) -> Option<String> {
-    let inside = var(&herdr.inside).is_some_and(|flag| flag == "1");
-    let live = var(&herdr.socket).is_some_and(|socket| std::path::Path::new(&socket).exists());
-    if herdr.enabled && inside && live {
-        var(&herdr.pane)
-    } else {
-        None
-    }
 }
 
 /// The configured effort level, for a session that reports none.
@@ -99,7 +129,7 @@ pub fn effort(claude: &config::Claude) -> Option<Effort> {
     Effort::new(level)
 }
 
-pub fn appearance(mode: Mode) -> Appearance {
+fn appearance(mode: Mode) -> Appearance {
     match mode {
         Mode::Auto if interface_style().as_deref() == Some("Dark") => Appearance::Dark,
         Mode::Auto | Mode::Light => Appearance::Light,

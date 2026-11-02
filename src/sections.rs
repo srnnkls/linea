@@ -1,76 +1,96 @@
 //! What each section shows: a built-in text from the session, a template, or a
-//! hook's output.
+//! hook's output, under an icon that is fixed or picked by a state.
 
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+use jiff::tz::TimeZone;
 
 use crate::{
-    config::{BuiltIn, Config, Icon, Source},
+    config::{Appearance, BuiltIn, Config, Icon, Source},
     format,
+    hooks::HookOutputs,
+    host::Pane,
     line::Part,
     session::Session,
     template::Scope,
-    world::World,
+    workspace::Workspace,
 };
+
+/// Each built-in section's text, by name; absent where it has nothing to show.
+#[derive(Debug, Clone, Default)]
+pub struct BuiltInTexts(BTreeMap<&'static str, String>);
+
+impl BuiltInTexts {
+    pub fn new(
+        built_ins: &[BuiltIn],
+        session: &Session,
+        workspace: &Workspace,
+        pane: Option<&Pane>,
+        zone: &TimeZone,
+    ) -> Self {
+        Self(
+            built_ins
+                .iter()
+                .filter_map(|built_in| {
+                    text(built_in, session, workspace, pane, zone)
+                        .map(|text| (built_in.name(), text))
+                })
+                .collect(),
+        )
+    }
+
+    fn get(&self, built_in: &BuiltIn) -> Option<&str> {
+        self.0.get(built_in.name()).map(String::as_str)
+    }
+
+    /// Every built-in's text for templates, an absent one as empty.
+    pub fn for_templates(&self) -> BTreeMap<&'static str, String> {
+        BuiltIn::NAMES
+            .iter()
+            .map(|name| (*name, self.0.get(name).cloned().unwrap_or_default()))
+            .collect()
+    }
+}
 
 /// The configured sections that have something to show, in drawing order. A
 /// template that renders empty, or fails to render, leaves its section out.
-pub fn resolve(config: &Config, session: &Session, world: &World, input: &Value) -> Vec<Part> {
-    let scope = config
-        .sections
-        .iter()
-        .any(|section| match &section.source {
-            Source::Template(_) => true,
-            Source::Hook(hook) => hook.template.is_some(),
-            Source::BuiltIn(_) => false,
-        })
-        .then(|| {
-            let linea: BTreeMap<_, _> = config
-                .built_ins
-                .iter()
-                .map(|built_in| {
-                    (
-                        built_in.name(),
-                        text(built_in, session, world).unwrap_or_default(),
-                    )
-                })
-                .collect();
-            Scope::new(input, &linea, &world.vars, &world.zone)
-        });
+pub fn parts(
+    config: &Config,
+    texts: &BuiltInTexts,
+    outputs: &HookOutputs,
+    scope: &Scope,
+    appearance: Appearance,
+) -> Vec<Part> {
     let rendered = |template, output| {
         scope
-            .as_ref()
-            .and_then(|scope| scope.render(template, output).ok())
+            .render(template, output)
+            .ok()
             .filter(|text| !text.is_empty())
     };
-
     config
         .sections
         .iter()
         .filter_map(|section| {
             let text = match &section.source {
-                Source::BuiltIn(built_in) => text(built_in, session, world),
+                Source::BuiltIn(built_in) => texts.get(built_in).map(str::to_owned),
                 Source::Template(template) => rendered(template, None),
                 Source::Hook(hook) => {
-                    let output = world.hooks.get(&section.name)?;
+                    let output = outputs.get(&section.name)?;
                     match &hook.template {
                         Some(template) => rendered(template, Some(output)),
-                        None => Some(output.clone()),
+                        None => Some(output.to_owned()),
                     }
                 }
             }?;
             let icon = match &section.icon {
-                Icon::Bare => String::new(),
-                Icon::Fixed(icon) => icon.clone(),
-                Icon::Steps(steps) => format::step(steps.len(), session.context.percent)
-                    .and_then(|at| steps.get(at).cloned())
-                    .unwrap_or_default(),
+                Icon::Bare => "",
+                Icon::Fixed(icon) => icon,
+                Icon::Mapped(map) => map.pick(scope.lookup(&map.state)).unwrap_or_default(),
             };
             Some(Part {
                 name: section.name.clone(),
-                colour: section.shade.under(world.appearance),
-                icon,
+                colour: section.shade.under(appearance),
+                icon: icon.to_owned(),
                 text,
                 fit: section.fit.clone(),
             })
@@ -78,23 +98,28 @@ pub fn resolve(config: &Config, session: &Session, world: &World, input: &Value)
         .collect()
 }
 
-/// A built-in section's text; `None` leaves the section out.
-fn text(built_in: &BuiltIn, session: &Session, world: &World) -> Option<String> {
+fn text(
+    built_in: &BuiltIn,
+    session: &Session,
+    workspace: &Workspace,
+    pane: Option<&Pane>,
+    zone: &TimeZone,
+) -> Option<String> {
     let present = |text: String| Some(text).filter(|text| !text.is_empty());
     match built_in {
         BuiltIn::Model => Some(session.model.name.clone()),
-        BuiltIn::Effort => world
+        BuiltIn::Effort => session
             .effort
             .as_ref()
             .map(|effort| effort.as_str().to_owned()),
-        BuiltIn::Project => present(world.workspace.project.clone()),
-        BuiltIn::Branch => present(world.workspace.branch.clone()),
-        BuiltIn::Pane => world.pane.clone(),
+        BuiltIn::Project => present(workspace.project.clone()),
+        BuiltIn::Branch => present(workspace.branch.clone()),
+        BuiltIn::Pane => pane.map(|Pane(pane)| pane.clone()),
         BuiltIn::Duration => present(format::elapsed(session.elapsed)),
         BuiltIn::Cache { format } => session
             .cache
             .expires
-            .and_then(|at| present(format::time(at, format, &world.zone))),
+            .and_then(|at| present(format::time(at, format, zone))),
         BuiltIn::CacheMisses => {
             (session.cache.misses > 0).then(|| session.cache.misses.to_string())
         }

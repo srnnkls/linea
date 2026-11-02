@@ -38,7 +38,7 @@ sections = ["model", "effort", "project", "branch", "weather", "context"]
 separator = "  "
 
 [appearance]
-mode = "auto"            # auto follows macOS; dark or light pins a palette
+mode = "auto"            # auto follows macOS (light elsewhere); dark or light pins a palette
 
 [palette.dark]
 teal = "#4db5bd"
@@ -54,7 +54,7 @@ fit = { rank = 3, grow = true, min = 16, requires = "project" }
 format = "%H:%M"
 ```
 
-A colour name has to exist in both palettes.
+A colour name has to exist in both palettes. A key that does not apply to its section, such as `format` outside `cache` or `fit.min` on a section that does not grow, is an error rather than ignored.
 
 ### Sections
 
@@ -62,16 +62,32 @@ The built-in sections are `model`, `effort`, `project`, `branch`, `pane`, `durat
 
 | Key | Meaning |
 | --- | --- |
-| `icon` | Drawn before the text; empty draws the text alone |
-| `icons` | Steps from empty to full, picked by the context share |
+| `icon` | Drawn before the text: a fixed string, or picked by a state (below); empty draws the text alone |
 | `colour` | A palette name or a literal `#rrggbb` |
 | `fit` | `"always"`, a rank, or `{ rank, grow, min, requires }` |
 | `enabled` | `false` leaves the section out |
 | `format` | strftime format for `cache` |
 | `template` | A template that takes the place of the section's text |
 | `run` | A hook command; see below |
+| `emit` | `true` sends an [event](docs/events.md) when the section's text changes |
 
 Sections that `fit = "always"` take their columns first. Ranked sections then claim theirs from the lowest rank up while they fit. One section may `grow`: it holds up to `min` columns at its rank and takes whatever is left once every rank is placed, cut short with an ellipsis. `requires` draws a section only when another one is drawn.
+
+### Icons
+
+An icon can follow a state instead of being fixed. `state` names a value by its path in the status JSON or under `linea` (the same names a template sees); `at` picks the icon of the highest threshold at or below a numeric state, `match` the icon for an exact value. `default` covers a state that is missing or matches no rule.
+
+```toml
+[sections.context.icon]
+state = "context_window.used_percentage"
+default = "○"
+at = { 0 = "○", 25 = "◔", 50 = "◑", 75 = "◕", 100 = "●" }
+
+[sections.effort.icon]
+state = "linea.effort"
+match = { low = "▁", medium = "▄", high = "█" }
+default = "?"
+```
 
 ### Templates
 
@@ -129,6 +145,10 @@ run = "curl -s 'wttr.in/?format=%t'"
 template = "{{ output | replace('+', '') }}"
 ```
 
+### Events
+
+Sections with `emit = true` (model and effort by default) send an event when their text changes: `events.body`, rendered as a template, goes to `events.command` on stdin, and the command acknowledges it by a marker in its output or by its exit status. By default the events go to limen, which shows the model and effort on the herdr pane. [docs/events.md](docs/events.md) describes the protocol: when an event goes out, what the command receives, and how acknowledgement and retries work.
+
 ### Integrations
 
 ```toml
@@ -139,14 +159,6 @@ inside = "HERDR_ENV"
 pane = "HERDR_PANE_ID"
 socket = "HERDR_SOCKET_PATH"
 
-# Model and effort changes go to this command as a StatusLine hook event on stdin.
-[report]
-enabled = true
-command = ["limen", "hook", "claude"]
-received = '"received":true'
-retry = "30s"
-requires = "HERDR_PANE_ID"
-
 # Where the effort level comes from when the session reports none.
 [claude]
 effort = "CLAUDE_CODE_EFFORT_LEVEL"
@@ -156,6 +168,6 @@ settings = "~/.claude/settings.json"   # unset follows CLAUDE_CONFIG_DIR
 ## Development
 
 ```sh
-mise run check     # clippy, rustfmt, tests
+mise run check     # clippy, rustfmt, unit and scrut tests
 mise run preview   # re-render docs/preview; LINEA_PREVIEW_FONT and LINEA_PREVIEW_FAMILY pick the font
 ```

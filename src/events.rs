@@ -1,7 +1,7 @@
-//! Sends model and effort changes to a report command (limen by default, which
-//! relays them to the herdr pane: the hook events it hears carry no effort).
-//! One record per session holds the last key sent and whether the command took
-//! it; an unanswered send is retried once `retry` has passed.
+//! Events: when the text of a section marked `emit` changes, linea renders the
+//! events body and hands it to the events command. One record per session holds
+//! the last state sent and whether the command acknowledged it; an
+//! unacknowledged send is retried once `retry` has passed.
 
 use std::{
     fs,
@@ -12,49 +12,42 @@ use std::{
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::{
-    child, config, host,
-    session::{Effort, Session},
+    child,
+    config::{self, Acknowledgement},
+    host,
+    line::Part,
+    session::SessionId,
+    template::Scope,
 };
 
 pub const SUBCOMMAND: &str = "deliver";
 
-/// What a detached child needs to deliver one report.
+/// What a detached child needs to deliver one event.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Delivery {
     pub record: PathBuf,
-    pub key: String,
+    /// The emitting sections' texts, joined: the state this event reports.
+    pub state: String,
     pub command: Vec<String>,
-    pub received: String,
-    pub event: Event,
-}
-
-/// A `StatusLine` hook event, as the report command reads it on stdin.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Event {
-    hook_event_name: String,
-    model: String,
-    effort: String,
-    session_id: Value,
-    transcript_path: Value,
-    cwd: Value,
+    pub acknowledgement: Acknowledgement,
+    pub body: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Record {
-    Taken,
+    Acknowledged,
     Sent { at: i64 },
     Other,
 }
 
 impl Record {
-    fn read(seen: &str, key: &str) -> Self {
+    fn read(seen: &str, state: &str) -> Self {
         let seen = seen.trim_end_matches('\n');
-        if seen == format!("{key} ok") {
-            Self::Taken
-        } else if let Some(rest) = seen.strip_prefix(&format!("{key} sent ")) {
+        if seen == format!("{state} ok") {
+            Self::Acknowledged
+        } else if let Some(rest) = seen.strip_prefix(&format!("{state} sent ")) {
             let at = rest
                 .rsplit(' ')
                 .next()
@@ -68,69 +61,77 @@ impl Record {
 
     fn due(&self, now: i64, retry: i64) -> bool {
         match self {
-            Self::Taken => false,
+            Self::Acknowledged => false,
             Self::Sent { at } => now - at >= retry,
             Self::Other => true,
         }
     }
 }
 
-/// Sends the session's model and effort when they changed since the command last took them.
+/// The state the emitting sections report: their texts in drawing order, an absent one as empty.
+pub fn state(config: &config::Config, parts: &[Part]) -> Option<String> {
+    let texts: Vec<&str> = config
+        .sections
+        .iter()
+        .filter(|section| section.emit)
+        .map(|section| {
+            parts
+                .iter()
+                .find(|part| part.name == section.name)
+                .map_or("", |part| part.text.as_str())
+        })
+        .collect();
+    (!texts.is_empty()).then(|| texts.join("/"))
+}
+
+/// Sends an event when the state changed since the command last acknowledged it.
 pub fn send(
-    report: &config::Report,
-    input: &Value,
-    session: &Session,
-    effort: Option<&Effort>,
+    events: &config::Events,
+    state: Option<&str>,
+    scope: &Scope,
+    session: &SessionId,
     now: Timestamp,
 ) {
-    let Some(program) = report.command.first() else {
+    let (Some(state), Some(program)) = (state, events.command.first()) else {
         return;
     };
-    if !report.enabled
-        || report
+    if !events.enabled
+        || events
             .requires
             .as_deref()
             .is_some_and(|name| host::var(name).is_none())
-        || session.model.id.is_empty()
-        || session.id.is_empty()
+        || session.is_empty()
         || !host::on_path(program)
     {
         return;
     }
-    let level = effort.map_or("", Effort::explicit);
-    let key = format!("{}/{level}", session.model.id);
     let record = PathBuf::from(format!(
-        "{}/claude-statusline-model.{}",
+        "{}/linea-events.{}",
         host::temp_dir(),
-        session.id.as_str()
+        session.file_name()
     ));
     let seen = fs::read_to_string(&record).unwrap_or_default();
     let now = now.as_second();
-    if !Record::read(&seen, &key).due(now, report.retry.as_secs())
-        || fs::write(&record, format!("{key} sent {now}\n")).is_err()
-    {
+    if !Record::read(&seen, state).due(now, events.retry.as_secs()) {
         return;
     }
-    let field = |name| input.get(name).cloned().unwrap_or(Value::Null);
-    let event = Event {
-        hook_event_name: "StatusLine".into(),
-        model: session.model.id.clone(),
-        effort: level.into(),
-        session_id: field("session_id"),
-        transcript_path: field("transcript_path"),
-        cwd: field("cwd"),
+    let Ok(body) = scope.render(&events.body, None) else {
+        return;
     };
+    if fs::write(&record, format!("{state} sent {now}\n")).is_err() {
+        return;
+    }
     let delivery = Delivery {
         record,
-        key,
-        command: report.command.clone(),
-        received: report.received.clone(),
-        event,
+        state: state.to_owned(),
+        command: events.command.clone(),
+        acknowledgement: events.acknowledgement.clone(),
+        body,
     };
     let _ = child::detach(SUBCOMMAND, &delivery);
 }
 
-/// The detached child: hands the event to the command and records whether it was taken.
+/// The detached child: hands the body to the command and records whether it acknowledged it.
 pub fn deliver(delivery: &Delivery) {
     let Some((program, args)) = delivery.command.split_first() else {
         return;
@@ -144,17 +145,20 @@ pub fn deliver(delivery: &Delivery) {
     else {
         return;
     };
-    if let Some(mut stdin) = command.stdin.take()
-        && let Ok(mut event) = serde_json::to_vec(&delivery.event)
-    {
-        event.push(b'\n');
-        let _ = stdin.write_all(&event);
+    if let Some(mut stdin) = command.stdin.take() {
+        let _ = stdin.write_all(format!("{}\n", delivery.body).as_bytes());
     }
     let Ok(output) = command.wait_with_output() else {
         return;
     };
-    if String::from_utf8_lossy(&output.stdout).contains(&delivery.received) {
-        let _ = fs::write(&delivery.record, format!("{} ok\n", delivery.key));
+    let acknowledged = match &delivery.acknowledgement {
+        Acknowledgement::Marker(marker) => {
+            String::from_utf8_lossy(&output.stdout).contains(marker.as_str())
+        }
+        Acknowledgement::ExitStatus => output.status.success(),
+    };
+    if acknowledged {
+        let _ = fs::write(&delivery.record, format!("{} ok\n", delivery.state));
     }
 }
 
@@ -163,19 +167,19 @@ mod tests {
     use super::Record;
 
     #[test]
-    fn a_taken_key_is_not_resent() {
-        assert!(!Record::read("m/high ok\n", "m/high").due(100, 30));
+    fn an_acknowledged_state_is_not_resent() {
+        assert!(!Record::read("Opus/high ok\n", "Opus/high").due(100, 30));
     }
 
     #[test]
-    fn an_unanswered_send_waits_out_the_retry() {
-        let sent = Record::read("m/high sent 100", "m/high");
+    fn an_unacknowledged_send_waits_out_the_retry() {
+        let sent = Record::read("Opus/high sent 100", "Opus/high");
         assert!(!sent.due(129, 30));
         assert!(sent.due(130, 30));
     }
 
     #[test]
-    fn a_changed_key_is_sent() {
-        assert!(Record::read("m/low ok", "m/high").due(0, 30));
+    fn a_changed_state_is_sent() {
+        assert!(Record::read("Opus/low ok", "Opus/high").due(0, 30));
     }
 }

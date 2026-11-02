@@ -14,7 +14,8 @@ use crate::{format, session::Tokens};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template(String);
 
-/// Everything a template reads: built once per render, then shared by every section.
+/// Everything templates and icon states read: built once per render, then
+/// shared by every section and the events body.
 pub struct Scope {
     env: Environment<'static>,
     base: Map<String, Value>,
@@ -33,7 +34,7 @@ impl Scope {
     pub fn new(
         input: &Value,
         linea: &BTreeMap<&'static str, String>,
-        vars: &BTreeMap<String, String>,
+        vars: BTreeMap<String, String>,
         zone: &TimeZone,
     ) -> Self {
         let mut env = Environment::new();
@@ -67,12 +68,20 @@ impl Scope {
         );
         base.insert(
             "env".into(),
-            vars.iter()
-                .map(|(k, v)| (k.clone(), Value::from(v.as_str())))
+            vars.into_iter()
+                .map(|(k, v)| (k, Value::String(v)))
                 .collect::<Map<_, _>>()
                 .into(),
         );
         Self { env, base }
+    }
+
+    /// The value at a dotted path, such as `context_window.used_percentage` or `linea.effort`.
+    pub fn lookup(&self, path: &str) -> Option<&Value> {
+        let mut keys = path.split('.');
+        let first = self.base.get(keys.next()?)?;
+        keys.try_fold(first, |value, key| value.get(key))
+            .filter(|value| !value.is_null())
     }
 
     /// The template rendered and trimmed; `output` is a hook's text, when the section has one.
@@ -108,7 +117,7 @@ mod tests {
         let scope = Scope::new(
             &Value::Null,
             &BTreeMap::new(),
-            &BTreeMap::new(),
+            BTreeMap::new(),
             &TimeZone::UTC,
         );
         let template =

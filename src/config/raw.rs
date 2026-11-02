@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use jiff::SignedDuration;
 use serde::{Deserialize, Deserializer, de};
 
-use super::{Claim, Fit, Mode, Rgb};
+use super::{Mode, Rgb};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -15,7 +15,7 @@ pub struct Config {
     pub palette: Palettes,
     pub sections: BTreeMap<String, Section>,
     pub herdr: Herdr,
-    pub report: Report,
+    pub events: Events,
     pub claude: Claude,
 }
 
@@ -25,7 +25,7 @@ pub struct Line {
     pub sections: Vec<String>,
     pub separator: String,
     pub gap: String,
-    pub margin: i64,
+    pub margin: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,9 +47,7 @@ pub struct Section {
     #[serde(default = "enabled")]
     pub enabled: bool,
     #[serde(default)]
-    pub icon: Option<String>,
-    #[serde(default)]
-    pub icons: Vec<String>,
+    pub icon: Option<Icon>,
     pub colour: Colour,
     pub fit: Fit,
     #[serde(default)]
@@ -62,6 +60,54 @@ pub struct Section {
     pub refresh: Option<SignedDuration>,
     #[serde(default, deserialize_with = "duration")]
     pub timeout: Option<SignedDuration>,
+    #[serde(default)]
+    pub emit: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Icon {
+    Fixed(String),
+    Mapped(IconMap),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IconMap {
+    pub state: String,
+    #[serde(default)]
+    pub at: Option<BTreeMap<String, String>>,
+    #[serde(default, rename = "match")]
+    pub matches: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
+/// `"exit"`, or `{ marker = "…" }`.
+#[derive(Debug)]
+pub enum Acknowledge {
+    Exit,
+    Marker(String),
+}
+
+/// `"always"`, a rank, or a claim table.
+#[derive(Debug)]
+pub enum Fit {
+    Always,
+    Rank(i64),
+    Claim(Claim),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Claim {
+    pub rank: i64,
+    #[serde(default)]
+    pub grow: bool,
+    #[serde(default)]
+    pub min: Option<u16>,
+    #[serde(default)]
+    pub requires: Option<String>,
 }
 
 /// A palette name, or a literal `#rrggbb`.
@@ -82,10 +128,11 @@ pub struct Herdr {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Report {
+pub struct Events {
     pub enabled: bool,
     pub command: Vec<String>,
-    pub received: String,
+    pub body: String,
+    pub acknowledge: Acknowledge,
     #[serde(deserialize_with = "required_duration")]
     pub retry: SignedDuration,
     #[serde(default)]
@@ -138,6 +185,29 @@ impl<'de> Deserialize<'de> for Colour {
     }
 }
 
+impl<'de> Deserialize<'de> for Acknowledge {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Marker {
+            marker: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Written {
+            Word(String),
+            Marker(Marker),
+        }
+        match Written::deserialize(deserializer)? {
+            Written::Word(word) if word == "exit" => Ok(Self::Exit),
+            Written::Word(word) => Err(de::Error::custom(format!(
+                "acknowledge is \"exit\" or {{ marker = \"…\" }}, not `{word}`"
+            ))),
+            Written::Marker(Marker { marker }) => Ok(Self::Marker(marker)),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for Fit {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -152,13 +222,8 @@ impl<'de> Deserialize<'de> for Fit {
             Written::Word(word) => Err(de::Error::custom(format!(
                 "fit is \"always\", a rank or a table, not `{word}`"
             ))),
-            Written::Rank(rank) => Ok(Self::Ranked(Claim {
-                rank,
-                grow: false,
-                min: 0,
-                requires: None,
-            })),
-            Written::Table(claim) => Ok(Self::Ranked(claim)),
+            Written::Rank(rank) => Ok(Self::Rank(rank)),
+            Written::Table(claim) => Ok(Self::Claim(claim)),
         }
     }
 }
@@ -173,20 +238,13 @@ mod tests {
             toml::from_str::<BTreeMap<String, Fit>>(&format!("fit = {text}"))
                 .map(|mut m| m.remove("fit").unwrap())
         };
-        assert_eq!(fit("\"always\"").unwrap(), Fit::Always);
-        assert!(matches!(
-            fit("3").unwrap(),
-            Fit::Ranked(Claim {
-                rank: 3,
-                grow: false,
-                ..
-            })
-        ));
+        assert!(matches!(fit("\"always\"").unwrap(), Fit::Always));
+        assert!(matches!(fit("3").unwrap(), Fit::Rank(3)));
         assert!(matches!(
             fit("{ rank = 1, grow = true, min = 8 }").unwrap(),
-            Fit::Ranked(Claim {
+            Fit::Claim(Claim {
                 grow: true,
-                min: 8,
+                min: Some(8),
                 ..
             })
         ));

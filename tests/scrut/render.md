@@ -6,7 +6,7 @@ linea reads Claude Code's status JSON on stdin and draws one line, fitted to `CO
 $ . "$TESTDIR/_setup.sh" && isolate && line() { linea | sed 's/\x1b\[[0-9;]*m//g'; }
 ```
 
-ASCII icons keep the expected lines readable; the context icon steps through the digits.
+ASCII icons keep the expected lines readable; the context icon reads `context_window.used_percentage` and steps through digits.
 
 ```scrut
 $ mkdir -p config/linea && cat > config/linea/linea.toml <<'TOML'
@@ -17,7 +17,10 @@ $ mkdir -p config/linea && cat > config/linea/linea.toml <<'TOML'
 > sections.duration.icon = "D"
 > sections.cache.icon = "C"
 > sections.cache_misses.icon = "X"
-> sections.context.icons = ["0", "1", "2", "3", "4", "5", "6", "7", "8"]
+> [sections.context.icon]
+> state = "context_window.used_percentage"
+> default = "0"
+> at = { 0 = "0", 7 = "1", 19 = "2", 32 = "3", 44 = "4", 57 = "5", 69 = "6", 82 = "7", 100 = "8" }
 > TOML
 ```
 

@@ -3,6 +3,7 @@
 //! that the next render picks up.
 
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -13,7 +14,12 @@ use std::{
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
-use crate::{child, config::Hook, host, session::SessionId};
+use crate::{
+    child,
+    config::{Config, Hook, SectionName, Source},
+    host,
+    session::{Session, SessionId},
+};
 
 pub const SUBCOMMAND: &str = "refresh";
 
@@ -29,9 +35,36 @@ pub struct Refresh {
     pub input: String,
 }
 
+/// Each hook section's last output, by section name.
+#[derive(Debug, Clone, Default)]
+pub struct HookOutputs(BTreeMap<SectionName, String>);
+
+impl HookOutputs {
+    /// Reads every hook section's cached output, starting refreshes for stale ones.
+    pub fn read(config: &Config, session: &Session, input: &str) -> Self {
+        Self(
+            config
+                .sections
+                .iter()
+                .filter_map(|section| match &section.source {
+                    Source::Hook(hook) => {
+                        cached(&section.name, hook, &session.id, &session.dir, input)
+                            .map(|output| (section.name.clone(), output))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
+    pub fn get(&self, section: &SectionName) -> Option<&str> {
+        self.0.get(section).map(String::as_str)
+    }
+}
+
 /// The hook's last output, refreshed in the background once older than its `refresh`.
-pub fn cached(
-    section: &str,
+fn cached(
+    section: &SectionName,
     hook: &Hook,
     session: &SessionId,
     dir: &str,
@@ -44,7 +77,7 @@ pub fn cached(
     if age(&cache).is_none_or(|age| age >= hook.refresh) && !pending(&cache, hook.timeout) {
         let refresh = Refresh {
             cache: cache.clone(),
-            section: section.to_owned(),
+            section: section.to_string(),
             command: hook.command.clone(),
             dir: dir.to_owned(),
             timeout: hook.timeout.unsigned_abs(),

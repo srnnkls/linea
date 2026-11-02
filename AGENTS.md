@@ -4,7 +4,7 @@ linea renders the Claude Code status line: it reads the session JSON on stdin an
 
 ## Architecture
 
-Functional core, imperative shell: `main` gathers every effect into a `World` (repository, terminal, appearance, environment, hook output), then the line is a pure function of the session, the configuration and that world. Input is parsed into domain types once, at the boundary: the status JSON into `Session`, linea.toml into a validated `Config`, messages to detached children into typed structs.
+Functional core, imperative shell. `main` is the composition root: it reads each effect once into a domain value (`Terminal`, `Workspace`, `Pane`, `HookOutputs`, the session's effective effort), then the line is a pure function of those values, the session and the configuration. Input is parsed into domain types at the boundary: the status JSON into `Session`, linea.toml into a `Config` whose sum types (`Source`, `Fit`, `Icon`, `Acknowledgement`) leave no invalid combination to check later, messages to detached children into typed structs.
 
 ## Rules
 

@@ -47,10 +47,6 @@ pub struct PromptCache {
 }
 
 impl SessionId {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -81,14 +77,16 @@ impl Effort {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// The level as limen hears it: the implicit default is no explicit level.
-    pub fn explicit(&self) -> &str {
-        if self.0 == "default" { "" } else { &self.0 }
-    }
 }
 
 impl Session {
+    /// The session with a configured effort level where it reports none.
+    #[must_use]
+    pub fn or_effort(self, configured: impl FnOnce() -> Option<Effort>) -> Self {
+        let effort = self.effort.or_else(configured);
+        Self { effort, ..self }
+    }
+
     pub fn parse(input: &Value) -> Self {
         let effort = match present(input, &["effort"]) {
             Some(Value::Object(effort)) => effort.get("level").filter(|v| is_present(v)),

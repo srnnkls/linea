@@ -1,15 +1,14 @@
 mod child;
 mod config;
+mod events;
 mod format;
 mod hooks;
 mod host;
 mod line;
-mod report;
 mod sections;
 mod session;
 mod template;
 mod workspace;
-mod world;
 
 use std::{io::Read, path::Path};
 
@@ -17,7 +16,14 @@ use clap::{Parser, Subcommand};
 use jiff::Timestamp;
 use serde_json::Value;
 
-use crate::{session::Session, world::World};
+use crate::{
+    hooks::HookOutputs,
+    host::{Pane, Terminal},
+    sections::BuiltInTexts,
+    session::Session,
+    template::Scope,
+    workspace::Workspace,
+};
 
 /// A status line for Claude Code: reads the session's status JSON on stdin
 /// and prints one line fitted to the terminal.
@@ -32,8 +38,8 @@ struct Cli {
 enum Command {
     /// Print the built-in configuration.
     Defaults,
-    /// Deliver a model and effort report; started detached by linea itself.
-    #[command(name = report::SUBCOMMAND, hide = true)]
+    /// Deliver an event; started detached by linea itself.
+    #[command(name = events::SUBCOMMAND, hide = true)]
     Deliver,
     /// Run a hook and cache its output; started detached by linea itself.
     #[command(name = hooks::SUBCOMMAND, hide = true)]
@@ -46,7 +52,7 @@ fn main() {
         Some(Command::Defaults) => print!("{}", config::DEFAULTS),
         Some(Command::Deliver) => {
             if let Some(delivery) = child::receive() {
-                report::deliver(&delivery);
+                events::deliver(&delivery);
             }
         }
         Some(Command::Refresh) => {
@@ -63,23 +69,37 @@ fn stdin() -> String {
     input
 }
 
-/// Effects first, gathered into a `World`; then the line as a pure function of
-/// the session, the configuration and that world.
+/// The effects first, each read once into a domain value; then the line as a
+/// pure function of them.
 fn status_line(raw: &str) -> String {
     let input: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
-    let session = Session::parse(&input);
-    let config = match config::load(Some(&host::global_config()), Path::new(&session.dir)) {
+    let parsed = Session::parse(&input);
+    let config = match config::load(Some(&host::global_config()), Path::new(&parsed.dir)) {
         Ok(config) => config,
         Err(error) => return format!("\x1b[31mlinea: {error}\x1b[0m"),
     };
-    let world = World::observe(&config, &session, raw);
-    report::send(
-        &config.report,
-        &input,
+    let session = parsed.or_effort(|| host::effort(&config.claude));
+    let terminal = Terminal::observe(config.mode);
+    let workspace = Workspace::locate(&session.dir);
+    let pane = Pane::observe(&config.herdr);
+    let outputs = HookOutputs::read(&config, &session, raw);
+
+    let texts = BuiltInTexts::new(
+        &config.built_ins,
         &session,
-        world.effort.as_ref(),
+        &workspace,
+        pane.as_ref(),
+        &terminal.zone,
+    );
+    let scope = Scope::new(&input, &texts.for_templates(), host::vars(), &terminal.zone);
+    let parts = sections::parts(&config, &texts, &outputs, &scope, terminal.appearance);
+
+    events::send(
+        &config.events,
+        events::state(&config, &parts).as_deref(),
+        &scope,
+        &session.id,
         Timestamp::now(),
     );
-    let parts = sections::resolve(&config, &session, &world, &input);
-    line::render(&parts, world.columns, &config.line)
+    line::render(&parts, terminal.columns, &config.line)
 }

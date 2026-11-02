@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::config::{Fit, LineStyle, Rgb};
+use crate::config::{Fit, LineStyle, Rgb, SectionName};
 
 const RESET: &str = "\x1b[0m";
 /// A growing part holds columns at its rank only when it can show this many.
@@ -11,7 +11,7 @@ const HOLD_AT_LEAST: i64 = 4;
 /// A section with something to show, ready to be fitted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Part {
-    pub name: String,
+    pub name: SectionName,
     pub colour: Rgb,
     pub icon: String,
     pub text: String,
@@ -97,34 +97,37 @@ pub fn render(parts: &[Part], columns: i64, style: &LineStyle) -> String {
     let taken = always.iter().map(|part| part.width(style)).sum::<i64>()
         + separator * (i64::try_from(always.len()).unwrap_or(0) - 1).max(0);
     let mut budget = Budget {
-        columns: columns - style.margin,
+        columns: columns - i64::from(style.margin),
         taken,
         separator,
     };
-    let mut shown: HashSet<&str> = always.iter().map(|part| part.name.as_str()).collect();
+    let mut shown: HashSet<&SectionName> = always.iter().map(|part| &part.name).collect();
 
     let mut ranked: Vec<_> = parts
         .iter()
         .enumerate()
         .filter_map(|(at, part)| match &part.fit {
-            Fit::Ranked(claim) => Some((claim.rank, at, part, claim)),
             Fit::Always => None,
+            Fit::Ranked { rank, .. } | Fit::Grow { rank, .. } => Some((*rank, at, part)),
         })
         .collect();
-    ranked.sort_by_key(|&(rank, at, ..)| (rank, at));
+    ranked.sort_by_key(|&(rank, at, _)| (rank, at));
 
     let mut reserve = 0;
     let mut growing = None;
-    for (.., part, claim) in ranked {
-        if claim
-            .requires
-            .as_deref()
+    for (.., part) in ranked {
+        if part
+            .fit
+            .requires()
             .is_some_and(|required| !shown.contains(required))
         {
             continue;
         }
-        if claim.grow {
-            let held = budget.room(part, style).min(claim.min).min(len(&part.text));
+        if let Fit::Grow { min, .. } = part.fit {
+            let held = budget
+                .room(part, style)
+                .min(i64::from(min))
+                .min(len(&part.text));
             if held >= HOLD_AT_LEAST {
                 reserve = separator + part.lead(style) + held;
             }
@@ -143,7 +146,7 @@ pub fn render(parts: &[Part], columns: i64, style: &LineStyle) -> String {
             if growing.is_some_and(|growing| growing.name == part.name) {
                 grown.clone()
             } else {
-                shown.contains(part.name.as_str()).then(|| part.clone())
+                shown.contains(&part.name).then(|| part.clone())
             }
         })
         .map(|part| part.draw(style))
@@ -158,7 +161,6 @@ fn len(text: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Claim;
 
     fn style() -> LineStyle {
         LineStyle {
@@ -170,7 +172,7 @@ mod tests {
 
     fn part(name: &str, text: &str, fit: Fit) -> Part {
         Part {
-            name: name.into(),
+            name: SectionName::new(name),
             colour: Rgb(1, 2, 3),
             icon: "#".into(),
             text: text.into(),
@@ -179,12 +181,10 @@ mod tests {
     }
 
     fn ranked(rank: i64) -> Fit {
-        Fit::Ranked(Claim {
+        Fit::Ranked {
             rank,
-            grow: false,
-            min: 0,
             requires: None,
-        })
+        }
     }
 
     fn draw(parts: &[Part], columns: i64) -> String {
@@ -214,12 +214,11 @@ mod tests {
 
     #[test]
     fn a_growing_part_holds_its_min_then_takes_what_is_left() {
-        let grow = Fit::Ranked(Claim {
+        let grow = Fit::Grow {
             rank: 1,
-            grow: true,
             min: 4,
             requires: None,
-        });
+        };
         let parts = [
             part("a", "aaaa", Fit::Always),
             part("g", "a-long-branch", grow),
@@ -232,12 +231,10 @@ mod tests {
 
     #[test]
     fn a_part_is_drawn_only_with_what_it_requires() {
-        let needs = Fit::Ranked(Claim {
+        let needs = Fit::Ranked {
             rank: 2,
-            grow: false,
-            min: 0,
-            requires: Some("p".into()),
-        });
+            requires: Some(SectionName::new("p")),
+        };
         let parts = [
             part("a", "aaaa", Fit::Always),
             part("p", "pppppppppp", ranked(1)),

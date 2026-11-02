@@ -39,21 +39,6 @@ pub fn context(context: &ContextUse) -> String {
     )
 }
 
-/// The step for a share: empty to full, the last one only at 100%.
-pub fn step(steps: usize, percent: i64) -> Option<usize> {
-    let last = i64::try_from(steps).ok()? - 1;
-    if last < 0 {
-        return None;
-    }
-    let at = (percent.min(100) * last + 50) / 100;
-    let at = if at == last && percent < 100 {
-        last - 1
-    } else {
-        at
-    };
-    usize::try_from(at.clamp(0, last)).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,13 +1,15 @@
-//! The configuration as linea uses it: validated once when loaded, so every
-//! section names a source, a colour for each appearance and a fit that holds.
+//! The configuration as linea uses it. linea.toml is parsed into these types
+//! once, at load: every drawn section has a source, a colour under each
+//! appearance and a fit that holds, so nothing downstream checks again.
 
 mod load;
 mod raw;
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, fmt, path::PathBuf};
 
 use jiff::SignedDuration;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::template::Template;
 
@@ -22,7 +24,7 @@ pub struct Config {
     pub built_ins: Vec<BuiltIn>,
     pub mode: Mode,
     pub herdr: Herdr,
-    pub report: Report,
+    pub events: Events,
     pub claude: Claude,
 }
 
@@ -32,16 +34,21 @@ pub struct LineStyle {
     /// Between a section's icon and its text.
     pub gap: String,
     /// Columns kept free at the right edge.
-    pub margin: i64,
+    pub margin: u16,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SectionName(String);
 
 #[derive(Debug, Clone)]
 pub struct Section {
-    pub name: String,
+    pub name: SectionName,
     pub source: Source,
     pub icon: Icon,
     pub shade: Shade,
     pub fit: Fit,
+    /// Sends an event when the section's text changes.
+    pub emit: bool,
 }
 
 /// Where a section's text comes from.
@@ -75,12 +82,29 @@ pub struct Hook {
     pub template: Option<Template>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Icon {
     Bare,
     Fixed(String),
-    /// Steps from empty to full, picked by the context share.
-    Steps(Vec<String>),
+    Mapped(IconMap),
+}
+
+/// An icon picked by the value of a named state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IconMap {
+    /// A path into the status JSON or `linea`, such as `context_window.used_percentage`.
+    pub state: String,
+    pub rule: IconRule,
+    /// For a state that is missing or matches no rule.
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IconRule {
+    /// The icon of the highest threshold at or below a numeric state; thresholds ascend.
+    At(Vec<(f64, String)>),
+    /// The icon for exactly this value.
+    Match(BTreeMap<String, String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,27 +132,23 @@ pub enum Mode {
     Light,
 }
 
-/// How a section claims its columns.
+/// How a section claims its columns. Lower ranks claim first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fit {
     /// Always drawn; its columns are taken before any ranked section.
     Always,
-    Ranked(Claim),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Claim {
-    /// Lower ranks claim their columns first.
-    pub rank: i64,
-    /// Holds `min` columns at its rank, then takes whatever is left once every rank is placed.
-    #[serde(default)]
-    pub grow: bool,
-    #[serde(default)]
-    pub min: i64,
-    /// Drawn only when this section is.
-    #[serde(default)]
-    pub requires: Option<String>,
+    /// Drawn while it fits.
+    Ranked {
+        rank: i64,
+        requires: Option<SectionName>,
+    },
+    /// Holds up to `min` columns at its rank, then takes whatever is left once
+    /// every rank is placed, cut short with an ellipsis.
+    Grow {
+        rank: i64,
+        min: u16,
+        requires: Option<SectionName>,
+    },
 }
 
 /// Where the pane section reads herdr from.
@@ -142,16 +162,26 @@ pub struct Herdr {
     pub socket: String,
 }
 
-/// Where model and effort changes are sent.
+/// Where events go when an emitting section's text changes.
 #[derive(Debug, Clone)]
-pub struct Report {
+pub struct Events {
     pub enabled: bool,
     pub command: Vec<String>,
-    /// Printed by the command once it took the report.
-    pub received: String,
+    /// Rendered as the event the command reads on stdin.
+    pub body: Template,
+    pub acknowledgement: Acknowledgement,
     pub retry: SignedDuration,
-    /// A variable that must be set for a report to go out.
+    /// A variable that must be set for an event to go out.
     pub requires: Option<String>,
+}
+
+/// How the events command signals that it took an event.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Acknowledgement {
+    /// Its output contains this text.
+    Marker(String),
+    /// It exits with status zero.
+    ExitStatus,
 }
 
 /// Where the effort level comes from when the session reports none.
@@ -194,10 +224,29 @@ pub enum Error {
     Colour { section: String, colour: String },
     #[error("only one section may grow")]
     Growing,
+    #[error("sections.{0}.icon takes either `at` or `match`")]
+    IconRule(String),
+    #[error("sections.{section}.icon.at: `{key}` is not a number")]
+    Threshold { section: String, key: String },
+    #[error("events.body: {0}")]
+    Body(String),
 }
 
 const REFRESH: SignedDuration = SignedDuration::from_secs(30);
 const TIMEOUT: SignedDuration = SignedDuration::from_secs(5);
+
+impl SectionName {
+    #[cfg(test)]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+}
+
+impl fmt::Display for SectionName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 impl Shade {
     pub fn under(self, appearance: Appearance) -> Rgb {
@@ -213,6 +262,39 @@ impl Rgb {
         let hex = text.strip_prefix('#').filter(|hex| hex.len() == 6)?;
         let channel = |at: usize| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok();
         Some(Self(channel(0)?, channel(2)?, channel(4)?))
+    }
+}
+
+impl IconMap {
+    /// The icon for a state's value.
+    pub fn pick(&self, state: Option<&Value>) -> Option<&str> {
+        let picked = match (&self.rule, state) {
+            (IconRule::At(thresholds), Some(value)) => value.as_f64().and_then(|value| {
+                thresholds
+                    .iter()
+                    .rev()
+                    .find(|(threshold, _)| *threshold <= value)
+                    .map(|(_, icon)| icon.as_str())
+            }),
+            (IconRule::Match(matches), Some(value)) => {
+                let key = match value {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                };
+                matches.get(&key).map(String::as_str)
+            }
+            (_, None) => None,
+        };
+        picked.or(self.default.as_deref())
+    }
+}
+
+impl Fit {
+    pub fn requires(&self) -> Option<&SectionName> {
+        match self {
+            Self::Always => None,
+            Self::Ranked { requires, .. } | Self::Grow { requires, .. } => requires.as_ref(),
+        }
     }
 }
 
@@ -286,7 +368,7 @@ impl TryFrom<raw::Config> for Config {
             .collect::<Result<Vec<_>, Error>>()?;
         if sections
             .iter()
-            .filter(|section| matches!(&section.fit, Fit::Ranked(claim) if claim.grow))
+            .filter(|section| matches!(section.fit, Fit::Grow { .. }))
             .count()
             > 1
         {
@@ -317,12 +399,16 @@ impl TryFrom<raw::Config> for Config {
                 pane: raw.herdr.pane,
                 socket: raw.herdr.socket,
             },
-            report: Report {
-                enabled: raw.report.enabled,
-                command: raw.report.command,
-                received: raw.report.received,
-                retry: raw.report.retry,
-                requires: raw.report.requires,
+            events: Events {
+                enabled: raw.events.enabled,
+                command: raw.events.command,
+                body: Template::parse(&raw.events.body).map_err(Error::Body)?,
+                acknowledgement: match raw.events.acknowledge {
+                    raw::Acknowledge::Exit => Acknowledgement::ExitStatus,
+                    raw::Acknowledge::Marker(marker) => Acknowledgement::Marker(marker),
+                },
+                retry: raw.events.retry,
+                requires: raw.events.requires,
             },
             claude: Claude {
                 effort: raw.claude.effort,
@@ -347,9 +433,6 @@ impl Section {
         if section.format.is_some() && name != "cache" {
             return Err(misplaced("format", "the cache section"));
         }
-        if !section.icons.is_empty() && name != "context" {
-            return Err(misplaced("icons", "the context section"));
-        }
         if section.run.is_none() {
             if section.refresh.is_some() {
                 return Err(misplaced("refresh", "a section with `run`"));
@@ -357,17 +440,6 @@ impl Section {
             if section.timeout.is_some() {
                 return Err(misplaced("timeout", "a section with `run`"));
             }
-        }
-        if let Fit::Ranked(Claim {
-            requires: Some(required),
-            ..
-        }) = &section.fit
-            && !drawn.contains(required)
-        {
-            return Err(Error::Requires {
-                section: name.into(),
-                required: required.clone(),
-            });
         }
 
         let template = section
@@ -392,21 +464,90 @@ impl Section {
             ),
         };
 
-        let icon = match (&section.icon, section.icons.is_empty()) {
-            (Some(icon), _) if icon.is_empty() => Icon::Bare,
-            (Some(icon), _) => Icon::Fixed(icon.clone()),
-            (None, false) => Icon::Steps(section.icons.clone()),
-            (None, true) => Icon::Bare,
+        let icon = match &section.icon {
+            None => Icon::Bare,
+            Some(raw::Icon::Fixed(icon)) if icon.is_empty() => Icon::Bare,
+            Some(raw::Icon::Fixed(icon)) => Icon::Fixed(icon.clone()),
+            Some(raw::Icon::Mapped(map)) => Icon::Mapped(icon_map(name, map)?),
         };
 
         Ok(Self {
-            name: name.into(),
+            name: SectionName(name.into()),
             source,
             icon,
             shade: shade(name, &section.colour, palettes)?,
-            fit: section.fit.clone(),
+            fit: fit(name, &section.fit, drawn)?,
+            emit: section.emit,
         })
     }
+}
+
+fn fit(section: &str, fit: &raw::Fit, drawn: &[String]) -> Result<Fit, Error> {
+    let requires = |required: &Option<String>| {
+        required
+            .as_ref()
+            .map(|required| {
+                if drawn.contains(required) {
+                    Ok(SectionName(required.clone()))
+                } else {
+                    Err(Error::Requires {
+                        section: section.into(),
+                        required: required.clone(),
+                    })
+                }
+            })
+            .transpose()
+    };
+    match fit {
+        raw::Fit::Always => Ok(Fit::Always),
+        raw::Fit::Rank(rank) => Ok(Fit::Ranked {
+            rank: *rank,
+            requires: None,
+        }),
+        raw::Fit::Claim(claim) => match (claim.grow, claim.min) {
+            (true, min) => Ok(Fit::Grow {
+                rank: claim.rank,
+                min: min.unwrap_or(0),
+                requires: requires(&claim.requires)?,
+            }),
+            (false, None) => Ok(Fit::Ranked {
+                rank: claim.rank,
+                requires: requires(&claim.requires)?,
+            }),
+            (false, Some(_)) => Err(Error::Misplaced {
+                section: section.into(),
+                key: "fit.min",
+                applies: "a section that grows",
+            }),
+        },
+    }
+}
+
+fn icon_map(section: &str, map: &raw::IconMap) -> Result<IconMap, Error> {
+    let rule = match (&map.at, &map.matches) {
+        (Some(at), None) => {
+            let mut thresholds = at
+                .iter()
+                .map(|(key, icon)| {
+                    key.parse::<f64>()
+                        .map(|threshold| (threshold, icon.clone()))
+                        .map_err(|_| Error::Threshold {
+                            section: section.into(),
+                            key: key.clone(),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            thresholds.sort_by(|a, b| a.0.total_cmp(&b.0));
+            IconRule::At(thresholds)
+        }
+        (None, Some(matches)) => IconRule::Match(matches.clone()),
+        _ => return Err(Error::IconRule(section.into())),
+    };
+    Ok(IconMap {
+        state: map.state.clone(),
+        rule,
+        default: map.default.clone(),
+    })
 }
 
 fn shade(section: &str, colour: &raw::Colour, palettes: &raw::Palettes) -> Result<Shade, Error> {
@@ -431,23 +572,36 @@ fn shade(section: &str, colour: &raw::Colour, palettes: &raw::Palettes) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn with(extra: &str) -> Result<Config, Error> {
         let mut table: toml::Table = DEFAULTS.parse().unwrap();
         load::merge(&mut table, extra.parse().unwrap());
-        let raw: raw::Config = toml::Value::Table(table).try_into().unwrap();
+        let raw: raw::Config =
+            toml::Value::Table(table)
+                .try_into()
+                .map_err(|source| Error::Parse {
+                    origin: "linea.toml".into(),
+                    source,
+                })?;
         Config::try_from(raw)
+    }
+
+    fn error(extra: &str) -> String {
+        with(extra).unwrap_err().to_string()
     }
 
     #[test]
     fn a_source_follows_run_then_template_then_the_name() {
         let config = with(
             "[line]\nsections = [\"a\", \"b\", \"model\"]\n\
-             [sections.a]\nrun = \"true\"\ncolour = \"grey\"\nfit = 1\n\
+             [sections.a]\nrun = \"true\"\ntemplate = \"<{{ output }}>\"\ncolour = \"grey\"\nfit = 1\n\
              [sections.b]\ntemplate = \"x\"\ncolour = \"grey\"\nfit = 2",
         )
         .unwrap();
-        assert!(matches!(config.sections[0].source, Source::Hook(_)));
+        assert!(
+            matches!(&config.sections[0].source, Source::Hook(hook) if hook.template.is_some())
+        );
         assert!(matches!(config.sections[1].source, Source::Template(_)));
         assert!(matches!(
             config.sections[2].source,
@@ -456,25 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_outside_their_section_are_errors() {
-        let error = |extra| with(extra).unwrap_err().to_string();
-        assert_eq!(
-            error("sections.model.format = \"%H\""),
-            "sections.model.format applies only to the cache section"
-        );
-        assert_eq!(
-            error("sections.model.icons = [\"a\"]"),
-            "sections.model.icons applies only to the context section"
-        );
-        assert_eq!(
-            error("sections.model.refresh = \"1s\""),
-            "sections.model.refresh applies only to a section with `run`"
-        );
-    }
-
-    #[test]
     fn a_section_without_a_source_is_an_error() {
-        let error = |extra| with(extra).unwrap_err().to_string();
         assert_eq!(
             error("line.sections = [\"w\"]\nsections.w.colour = \"grey\"\nsections.w.fit = 1"),
             "sections.w is no built-in section and has neither `run` nor `template`"
@@ -482,8 +618,85 @@ mod tests {
     }
 
     #[test]
-    fn only_one_section_grows() {
-        let error = with("sections.project.fit = { rank = 1, grow = true }").unwrap_err();
-        assert!(matches!(error, Error::Growing));
+    fn keys_outside_their_section_are_errors() {
+        assert_eq!(
+            error("sections.model.format = \"%H\""),
+            "sections.model.format applies only to the cache section"
+        );
+        assert_eq!(
+            error("sections.model.refresh = \"1s\""),
+            "sections.model.refresh applies only to a section with `run`"
+        );
+        assert_eq!(
+            error("sections.project.fit = { rank = 1, min = 8 }"),
+            "sections.project.fit.min applies only to a section that grows"
+        );
+    }
+
+    #[test]
+    fn a_requirement_must_be_drawn_and_only_one_section_grows() {
+        assert_eq!(
+            error("line.sections = [\"model\", \"branch\"]"),
+            "sections.branch requires `project`, which line.sections leaves out"
+        );
+        assert!(matches!(
+            with("sections.project.fit = { rank = 1, grow = true }"),
+            Err(Error::Growing)
+        ));
+    }
+
+    #[test]
+    fn an_icon_map_picks_by_threshold_or_match_and_falls_back() {
+        let at = IconMap {
+            state: "p".into(),
+            rule: IconRule::At(vec![
+                (0.0, "empty".into()),
+                (50.0, "half".into()),
+                (100.0, "full".into()),
+            ]),
+            default: Some("unknown".into()),
+        };
+        assert_eq!(at.pick(Some(&json!(49.9))), Some("empty"));
+        assert_eq!(at.pick(Some(&json!(50))), Some("half"));
+        assert_eq!(at.pick(Some(&json!(100))), Some("full"));
+        assert_eq!(at.pick(Some(&json!(-1))), Some("unknown"));
+        assert_eq!(at.pick(Some(&json!("high"))), Some("unknown"));
+        assert_eq!(at.pick(None), Some("unknown"));
+
+        let matches = IconMap {
+            state: "e".into(),
+            rule: IconRule::Match(BTreeMap::from([("high".into(), "H".into())])),
+            default: None,
+        };
+        assert_eq!(matches.pick(Some(&json!("high"))), Some("H"));
+        assert_eq!(matches.pick(Some(&json!("low"))), None);
+    }
+
+    #[test]
+    fn an_icon_map_needs_exactly_one_rule_with_numeric_thresholds() {
+        assert_eq!(
+            error("sections.model.icon = { state = \"x\" }"),
+            "sections.model.icon takes either `at` or `match`"
+        );
+        assert_eq!(
+            error("sections.model.icon = { state = \"x\", at = { low = \"a\" } }"),
+            "sections.model.icon.at: `low` is not a number"
+        );
+    }
+
+    #[test]
+    fn events_acknowledge_by_marker_or_by_exit_status() {
+        assert!(matches!(
+            with("").unwrap().events.acknowledgement,
+            Acknowledgement::Marker(_)
+        ));
+        assert_eq!(
+            with("events.acknowledge = \"exit\"")
+                .unwrap()
+                .events
+                .acknowledgement,
+            Acknowledgement::ExitStatus
+        );
+        assert!(with("events.acknowledge = \"maybe\"").is_err());
     }
 }
