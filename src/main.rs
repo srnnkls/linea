@@ -74,7 +74,7 @@ fn stdin() -> String {
 fn status_line(raw: &str) -> String {
     let input: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
     let parsed = Session::parse(&input);
-    let config = match config::load(Some(&host::global_config()), Path::new(&parsed.dir)) {
+    let config = match config::load(host::global_config().as_deref(), Path::new(&parsed.dir)) {
         Ok(config) => config,
         Err(error) => return format!("\x1b[31mlinea: {error}\x1b[0m"),
     };

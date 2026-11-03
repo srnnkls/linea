@@ -35,7 +35,7 @@ Then point Claude Code at it in `settings.json`:
 
 linea starts from its [built-in defaults](assets/config/default.toml) (`linea defaults` prints them) and merges these files over them, later ones winning:
 
-1. `~/.config/linea/linea.toml`, or the file `LINEA_CONFIG` names
+1. `linea/linea.toml` under `XDG_CONFIG_HOME`, else `~/.config/linea/linea.toml` (on macOS too), or the file `LINEA_CONFIG` names
 2. `linea.toml`, then `linea.local.toml`, in every directory from `/` down to the session's working directory
 
 Tables merge key by key; any other value, arrays included, replaces the one beneath it. A broken configuration shows its error in place of the line.
@@ -145,7 +145,7 @@ refresh = "10m"
 timeout = "3s"
 ```
 
-The command runs through `sh -c` in the session's working directory, with Claude Code's status JSON on stdin and `LINEA_SECTION` set to the section's name. The line never waits on it: linea shows the output it last cached for the session and starts a detached refresh once that output is older than `refresh` (30 seconds unless set). A command that fails, or outlasts `timeout` (5 seconds unless set), hides the section until its next refresh. Output is cached under `$XDG_CACHE_HOME/linea/hooks`.
+The command runs through `sh -c` in the session's working directory, with Claude Code's status JSON on stdin and `LINEA_SECTION` set to the section's name. The line never waits on it: linea shows the output it last cached for the session and starts a detached refresh once that output is older than `refresh` (30 seconds unless set). A command that fails, or outlasts `timeout` (5 seconds unless set), hides the section until its next refresh. Output is cached under `linea/hooks` in `XDG_CACHE_HOME`, else in the platform's cache directory (`~/Library/Caches` on macOS, `~/.cache` on Linux).
 
 With `template` beside `run`, the template formats the hook's output:
 

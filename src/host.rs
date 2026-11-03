@@ -1,6 +1,6 @@
 //! Reads from the machine around the session: environment, terminal, settings, appearance.
 
-use std::{collections::BTreeMap, env, fs::File, path::PathBuf};
+use std::{collections::BTreeMap, env, ffi::OsString, fs::File, path::PathBuf};
 
 use jiff::tz::TimeZone;
 use serde_json::Value;
@@ -15,31 +15,30 @@ pub fn var(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-pub fn home() -> PathBuf {
-    env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+/// An `XDG_*` base directory when it holds an absolute path, else the fallback.
+fn xdg_base(value: Option<OsString>, fallback: Option<PathBuf>) -> Option<PathBuf> {
+    value
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or(fallback)
 }
 
-/// The global linea.toml: `LINEA_CONFIG`, else under the XDG config home.
-pub fn global_config() -> PathBuf {
-    var("LINEA_CONFIG").map_or_else(
-        || {
-            var("XDG_CONFIG_HOME")
-                .map_or_else(|| home().join(".config"), PathBuf::from)
-                .join("linea/linea.toml")
-        },
-        PathBuf::from,
-    )
+/// The global linea.toml: `LINEA_CONFIG`, else `linea/linea.toml` under
+/// `XDG_CONFIG_HOME`, else under `~/.config`, as on Linux.
+pub fn global_config() -> Option<PathBuf> {
+    match var("LINEA_CONFIG") {
+        Some(path) => Some(PathBuf::from(path)),
+        None => xdg_base(
+            env::var_os("XDG_CONFIG_HOME"),
+            dirs::home_dir().map(|home| home.join(".config")),
+        )
+        .map(|base| base.join("linea/linea.toml")),
+    }
 }
 
-pub fn cache_dir() -> PathBuf {
-    var("XDG_CACHE_HOME")
-        .map_or_else(|| home().join(".cache"), PathBuf::from)
-        .join("linea")
-}
-
-pub fn temp_dir() -> String {
-    let dir = var("TMPDIR").unwrap_or_else(|| "/tmp".into());
-    dir.strip_suffix('/').unwrap_or(&dir).to_owned()
+/// `linea` under `XDG_CACHE_HOME`, else under the platform's cache directory.
+pub fn cache_dir() -> Option<PathBuf> {
+    xdg_base(env::var_os("XDG_CACHE_HOME"), dirs::cache_dir()).map(|base| base.join("linea"))
 }
 
 /// Where the line is drawn.
@@ -111,17 +110,14 @@ pub fn effort(claude: &config::Claude) -> Option<Effort> {
     if let Some(level) = var(&claude.effort) {
         return Effort::new(level);
     }
-    let path = claude.settings.as_deref().map_or_else(
-        || {
-            var("CLAUDE_CONFIG_DIR")
-                .map_or_else(|| home().join(".claude"), PathBuf::from)
-                .join("settings.json")
-        },
-        |path| match path.strip_prefix("~") {
-            Ok(rest) => home().join(rest),
+    let path = match (claude.settings.as_deref(), var("CLAUDE_CONFIG_DIR")) {
+        (Some(path), _) => match path.strip_prefix("~") {
+            Ok(rest) => dirs::home_dir()?.join(rest),
             Err(_) => path.to_owned(),
         },
-    );
+        (None, Some(dir)) => PathBuf::from(dir).join("settings.json"),
+        (None, None) => dirs::home_dir()?.join(".claude/settings.json"),
+    };
     let settings: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     let level = match settings.get("effortLevel") {
         None | Some(Value::Null | Value::Bool(false)) => "default".to_owned(),

@@ -105,11 +105,7 @@ pub fn send(
     {
         return;
     }
-    let record = PathBuf::from(format!(
-        "{}/linea-events.{}",
-        host::temp_dir(),
-        session.file_name()
-    ));
+    let record = std::env::temp_dir().join(format!("linea-events.{}", session.file_name()));
     let seen = fs::read_to_string(&record).unwrap_or_default();
     let now = now.as_second();
     if !Record::read(&seen, state).due(now, events.retry.as_secs()) {

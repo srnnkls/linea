@@ -70,7 +70,7 @@ fn cached(
     dir: &str,
     input: &str,
 ) -> Option<String> {
-    let cache = host::cache_dir()
+    let cache = host::cache_dir()?
         .join("hooks")
         .join(format!("{section}.{}", session.file_name()));
     let output = fs::read_to_string(&cache).ok();
